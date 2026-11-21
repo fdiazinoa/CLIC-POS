@@ -1,3 +1,4 @@
+import { markSettingsReturnQa, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import {canViewTicketHistory} from '../utils/ticketHistoryPermission';
 import {LegacyFiscalCheckoutAttempt} from '../services/fiscal/LegacyFiscalCheckoutAttempt';
 import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
@@ -4689,7 +4690,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const checkFiscalStatus = async (isCurrent: () => boolean) => {
          const type = requiredSaleFiscalType;
-         try{const receipt=await resolveCommittedFiscalReceipt();if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
+         try{const receipt=await measureSettingsReturnQa('fiscal.receiptRecovery', () => resolveCommittedFiscalReceipt());if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
          catch{if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(false);}
          if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
@@ -4708,7 +4709,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          try {
             if(v3Operational&&fiscalCompliance.mode==='ECF'){
-               const allocation=await fiscalWorkflowV2Client.checkoutFiscalStatus(type);
+               const allocation=await measureSettingsReturnQa('fiscal.checkoutStatus', () => fiscalWorkflowV2Client.checkoutFiscalStatus(type));
                if(!isCurrent())return;
                if(allocation){
                   setStatus(null);
@@ -4716,16 +4717,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   return;
                }
             }
-            let canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
+            let canIssue = await measureSettingsReturnQa('fiscal.canRequestMoreNCF', () => db.canRequestMoreNCF(type, terminalId, activeTerminalConfig));
             if (!isCurrent()) return;
             if (canIssue && usesDelegatedEcf && !navigator.onLine) {
                // V1 authorizes the offline sale, while the typed allocation
                // checked above supplies its document number.
-               const reserve = await fiscalWorkflowV2Client.offlineStatus();
+               const reserve = await measureSettingsReturnQa('fiscal.offlineStatus', () => fiscalWorkflowV2Client.offlineStatus());
                canIssue = Boolean(reserve?.validUntil && reserve.remaining > 0);
                if (!isCurrent()) return;
             }
-            const allocations = await db.get('fiscalAllocations');
+            const allocations = await measureSettingsReturnQa('fiscal.allocationsFallback', () => db.get('fiscalAllocations'));
             const authorityId = activeTerminalConfig?.erpTerminalId || terminalId;
             const allocation: any = (Array.isArray(allocations) ? allocations : []).find((entry: any) =>
                entry.terminalId === authorityId && entry.ncfType === type && entry.status === 'ACTIVE');
@@ -4733,7 +4734,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const remaining = canIssue && allocation ? allocation.reservedEnd - allocation.nextNumber + 1 : 0;
             const total = canIssue && allocation ? allocation.reservedEnd - allocation.reservedStart + 1 : 0;
             if (canIssue && allocation) {
-               const ranges = await db.get('fiscalRanges');
+               const ranges = await measureSettingsReturnQa('fiscal.rangesFallback', () => db.get('fiscalRanges'));
                if (!isCurrent()) return;
                const range: any = (Array.isArray(ranges) ? ranges : []).find((entry: any) => entry.id === allocation.fiscalRangeId);
                setStatus({ isConnected: true, currentNCF: `${range.prefix}${allocation.nextNumber.toString().padStart(8, '0')}`,
@@ -4759,8 +4760,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let started: number;
          do {
             started = requested;
-            await checkFiscalStatus(() => !cancelled && started === requested
-               && currentFiscalCheckScope.current === fiscalCheckScope);
+            await measureSettingsReturnQa('fiscal.check', () => checkFiscalStatus(() => !cancelled && started === requested
+               && currentFiscalCheckScope.current === fiscalCheckScope));
          } while (!cancelled && started !== requested);
          checking = false;
       };
@@ -5399,6 +5400,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             : nextPaymentFractionPart
                ? `COBRAR CUOTA ${nextPaymentFractionPart.index} DE ${activePaymentFraction?.count}`
                : 'COBRAR';
+   useLayoutEffect(() => {
+      markSettingsReturnQa(checkoutActionLabel === 'Sin confirmar' ? 'ui.unconfirmed'
+         : checkoutActionLabel === 'Sin Secuencia' ? 'ui.noSequence' : 'ui.checkoutLabel');
+   }, [checkoutActionLabel]);
    const editableRecoveredReservation = isRecoveredUberOrder ? null : activeRecoveredReservation;
    const isEditingRecoveredReservation = !!editableRecoveredReservation;
 

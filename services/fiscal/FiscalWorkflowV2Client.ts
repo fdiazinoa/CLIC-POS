@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import {validOrdinaryReturnReference,originalReferencePendingCode} from './FiscalReturnV1';
 import {verifyReturnStatus,returnStatusMessage} from './FiscalReturnStatus';
 import type {DispatchFiscalPreparation} from '../db/DispatchFiscalPreparation';
@@ -73,7 +74,9 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  return {
  /** Cached native policy shared by COBRAR and its precharge guard. Never acquires authority. */
  async checkoutFiscalStatus(type:string):Promise<{remaining:number;total:number;recovery?:boolean}|null>{
-  const native=store(),local=await readOfflineAuthority(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));
+  const native = store();
+  const local = await measureSettingsReturnQa('fiscal.localAuthority', readOfflineAuthority);
+  const current = native && await measureSettingsReturnQa('fiscal.currentCheckout', () => native.currentCheckout(fiscalWorkflowScopeKey(local.scope)));
   if(current&&['PREPARED','EFFECT_POSSIBLE'].includes(current.phase)){
    if(!current.allocation&&!current.permit?.leaseId)return null; // Online/V1 permits retain their existing caller policy.
    if(current.offlineBindingHash!==local.bindingHash)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
@@ -87,7 +90,8 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
    if(current.permit?.leaseId)return null; // Existing V1 preparation keeps its legacy numbering policy.
    if(current.allocation){if(!native?.allocationDraft)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');await native!.allocationDraft!(current);}
   }
-  const allocation=await native?.allocationAvailability?.(local,type);if(!allocation)return null;
+  const allocation = native?.allocationAvailability && await measureSettingsReturnQa('fiscal.allocationAvailability', () => native.allocationAvailability!(local, type));
+  if (!allocation) return null;
   return {remaining:allocation.remaining[type]||0,total:allocation.total?.[type]||allocation.remaining[type]||0};
  },
  async allocationReady(type?:string):Promise<boolean>{try{const value=await store()?.allocationAvailability?.(await readOfflineAuthority(),type);return Boolean(value&&Object.values(value.remaining).some(n=>n>0));}catch{return false;}},

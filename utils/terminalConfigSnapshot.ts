@@ -848,7 +848,7 @@ export const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSe
   });
 };
 
-const normalizeFiscalRange = (raw: unknown, _index: number): FiscalRangeDGII | null => {
+export const normalizeFiscalRange = (raw: unknown): FiscalRangeDGII | null => {
   const data = asObject(raw);
   const id = asString(data.id || data.range_id || data.uid);
   if (!id) return null;
@@ -913,29 +913,33 @@ const normalizeFiscalRange = (raw: unknown, _index: number): FiscalRangeDGII | n
     // This deployed collection omits activity flags; an ACTIVE terminal allocation
     // still remains mandatory. An explicit activity/status revocation wins.
     isActive: (!Object.prototype.hasOwnProperty.call(data, 'status') || asString(data.status).toUpperCase() === 'ACTIVE') &&
-      asBoolean(data.isActive ?? data.is_active, data.isActive == null && data.is_active == null),
+      [data.isActive, data.is_active, data.active].every(value => value == null || asBoolean(value)),
   };
 };
 
-const normalizeFiscalAllocation = (raw: unknown, _index: number, terminalId: string): FiscalAllocation | null => {
+export const normalizeFiscalAllocation = (raw: unknown): FiscalAllocation | null => {
   const data = asObject(raw);
   const id = asString(data.id || data.allocation_id || data.uid);
   if (!id) return null;
   const sourceTerminalId = asString(data.terminalId ?? data.terminal_id);
   const metadata = asObject(data.metadata);
-  if (!sourceTerminalId || !terminalId || sourceTerminalId !== terminalId ||
+  if (!sourceTerminalId ||
       (metadata.sourceTerminalId && metadata.sourceTerminalId !== sourceTerminalId) ||
       !['B01', 'B02', 'B04', 'B14', 'B15', 'E31', 'E32', 'E34', 'E44', 'E45'].includes(asString(data.ncfType || data.ncf_type).toUpperCase())) return null;
 
+  const status = asString(data.status) || 'CONFLICTED';
+  const isInactive = [data.isActive, data.is_active, data.active].some(value => readOptionalBoolean(value) === false);
+  const prefix = asString(data.prefix);
   return {
     id,
     terminalId: sourceTerminalId,
+    ...(prefix ? { prefix } : {}),
     fiscalRangeId: asString(data.fiscalRangeId ?? data.fiscal_range_id),
     ncfType: normalizeNcfType(data.ncfType || data.ncf_type),
     reservedStart: asNumber(data.reservedStart ?? data.reserved_start, 0),
     reservedEnd: asNumber(data.reservedEnd ?? data.reserved_end, 0),
     nextNumber: asNumber(data.nextNumber ?? data.next_number, 0),
-    status: (asString(data.status) || 'CONFLICTED') as FiscalAllocation['status'],
+    status: (isInactive && status === 'ACTIVE' ? 'PAUSED' : status) as FiscalAllocation['status'],
     releasedAt: asString(data.releasedAt ?? data.released_at) || null,
     metadata: {
       ...metadata,
@@ -2395,7 +2399,7 @@ export const applyTerminalConfigSnapshot = (
     ? resolvedFiscalCredentialKeyRaw || undefined
     : resolvedFiscalCredentialKeyRaw.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
   const fiscalRanges = (isNoFiscalMode ? [] : rawFiscalRangeRows)
-    .map((item, index) => normalizeFiscalRange(item, index))
+    .map(normalizeFiscalRange)
     .filter(Boolean) as FiscalRangeDGII[];
   const fiscalAllocations = firstFiscalAuthorityRows([asObject(incomingResolved.documents), resolvedDocuments], [
     'fiscal_allocations',
@@ -2403,9 +2407,9 @@ export const applyTerminalConfigSnapshot = (
     'fiscalAllocationsByTenant',
     'fiscal_allocations_by_tenant'
   ])
-    .map((item, index) => normalizeFiscalAllocation(item, index, canonicalFiscalTerminalId))
+    .map(normalizeFiscalAllocation)
     .filter((allocation) => {
-      if (!allocation) return false;
+      if (!allocation || allocation.terminalId !== canonicalFiscalTerminalId) return false;
       const sourceCompany = allocation.metadata?.companyId || allocation.metadata?.company_id || allocation.metadata?.sourceCompanyId;
       const expectedCompany = incomingCompanyId || configuredCompanyId;
       return !sourceCompany || Boolean(expectedCompany && sourceCompany === expectedCompany);
