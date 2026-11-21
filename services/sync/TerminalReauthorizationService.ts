@@ -1,7 +1,7 @@
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { registerErpSyncTerminal } from '../../utils/erpSyncLifecycle';
 import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
-import { renewTerminalSession } from './TerminalSessionRenewal';
+import { renewFiscalTerminalSession, renewTerminalSession } from './TerminalSessionRenewal';
 
 export type TerminalReauthorizationResult = {
   ok: boolean;
@@ -52,38 +52,44 @@ export const needsTerminalReauthorization = (): { required: boolean; reason: str
 };
 
 /**
- * Re-registers this terminal against the ERP and prepares the fiscal offline authority.
- * It is the only path that stores fresh device/sync tokens on the device, so every
- * recovery (manual button or automatic on boot) funnels through here.
+ * Prepares the fiscal offline authority. The fiscal diagnostic uses the existing
+ * device token only and leaves attempt reconciliation to its separate workflow.
  */
-export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResult> => {
+export const reauthorizeTerminal = async (
+  options: { reconcileFiscalSession?: boolean } = {},
+): Promise<TerminalReauthorizationResult> => {
   const credentials = readTerminalCredentialsSync();
   const deviceId = String(credentials.deviceId || resolveLocalDeviceId() || '').trim();
   const terminalId = String(credentials.erpTerminalId || credentials.terminalId || '').trim();
   if (!deviceId || !terminalId) {
     return { ok: false, message: 'La terminal no tiene identidad local para reautorizar (deviceId/terminalId).' };
   }
-  try {
-    const payload = await registerErpSyncTerminal({
-      deviceId,
-      terminalId,
-      localTerminalId: credentials.terminalCode || credentials.stationNumber || terminalId,
-      terminalName: credentials.terminalName || null,
-      companyId: credentials.companyId || null,
-      storeId: credentials.storeId || null,
-      isPrimary: true,
-    });
-    if (!payload) return { ok: false, message: 'El ERP no devolvió la vinculación de la terminal.' };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `No se pudo reautorizar la terminal: ${detail}` };
+  if (!options.reconcileFiscalSession) {
+    try {
+      const payload = await registerErpSyncTerminal({
+        deviceId,
+        terminalId,
+        localTerminalId: credentials.terminalCode || credentials.stationNumber || terminalId,
+        terminalName: credentials.terminalName || null,
+        companyId: credentials.companyId || null,
+        storeId: credentials.storeId || null,
+        isPrimary: true,
+      });
+      if (!payload) return { ok: false, message: 'El ERP no devolvió la vinculación de la terminal.' };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: `No se pudo reautorizar la terminal: ${detail}` };
+    }
   }
 
-  const staleNote = await reconcileStaleFiscalCheckout();
-  // The register rotates the ERP-side session token, so the device must adopt the current one;
-  // renewing here (never re-pairing) keeps the binding and the offline reserve intact.
-  const session = await renewTerminalSession();
-  const sessionNote = session.renewed
+  const staleNote = options.reconcileFiscalSession ? '' : await reconcileStaleFiscalCheckout();
+  const session = options.reconcileFiscalSession ? await renewFiscalTerminalSession() : await renewTerminalSession();
+  if (options.reconcileFiscalSession && !session.renewed) {
+    return { ok: false, message: `No se renovó la autorización fiscal: ${session.reason}.` };
+  }
+  const sessionNote = session.reason === 'AUTHORIZATION_RECOVERED'
+    ? 'Autorización local reconciliada con el ERP.'
+    : session.renewed
     ? (session.expiresAt ? `Sesión renovada hasta ${new Date(session.expiresAt).toLocaleString('es-DO')}.` : 'Sesión renovada sin vencimiento.')
     : `Sesión sin renovar: ${session.reason}.`;
 
@@ -97,13 +103,14 @@ export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResu
       ? 'Reserva fiscal local preparada.'
       : `Reserva fiscal: ${readiness.code || readiness.reason}.`;
   } catch (error) {
-    fiscal = `Reserva fiscal pendiente: ${error instanceof Error ? error.message : String(error)}.`;
+    const reason = error instanceof Error && 'bindingReason' in error ? ` (${error.bindingReason})` : '';
+    fiscal = `Reserva fiscal pendiente: ${error instanceof Error ? error.message : String(error)}${reason}.`;
   }
 
   const updated = readTerminalCredentialsSync();
   return {
     ok: true,
-    message: `Terminal reautorizada. ${sessionNote} ${fiscal}${staleNote}`,
+    message: `${options.reconcileFiscalSession ? '' : 'Terminal reautorizada. '}${sessionNote} ${fiscal}${staleNote}`,
     authStatus: updated.authStatus || null,
     expiresAt: updated.syncTokenExpiresAt || null,
   };

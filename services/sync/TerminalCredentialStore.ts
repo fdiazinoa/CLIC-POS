@@ -1,5 +1,5 @@
 import { TERMINAL_SESSION_RENEWED_EVENT } from './OperationalTerminalConfig';
-import {isTerminalAuthorizationSuperseded} from '../../utils/terminalAuthorizationGuard';
+import {isTerminalAuthorizationSuperseded, TERMINAL_AUTHORIZATION_BLOCK_STORAGE_KEY} from '../../utils/terminalAuthorizationGuard';
 import { Preferences } from '@capacitor/preferences';
 import type { BusinessConfig } from '../../types';
 import { separateTerminalIdentity } from './terminalIdentity';
@@ -393,7 +393,39 @@ export const captureTerminalSessionSnapshot=():TerminalSessionSnapshot=>{
     if(!credentials||typeof credentials!=='object'||Array.isArray(credentials))throw Error('SYNC_AUTH_CANONICAL_CREDENTIALS_REQUIRED');
     return {document,generation:credentialWriteGeneration,credentials};
 };
-export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{token:string;expiresAt:string|null;observation:TerminalSessionObservation},assertCurrent:()=>void):Promise<void>=>{
+// A fiscal operator can reconcile these historical observations only after the ERP
+// proves the same binding. Leave takeover and authoritative fiscal blocks intact.
+const RECOVERABLE_AUTH_STATUS = new Set(['NEEDS_REAUTH', 'DEVICE_NOT_AUTHORIZED', 'AUTH_ERROR']);
+const RECOVERABLE_AUTH_ERROR = new Set([
+    'DEVICE_SUPERSEDED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_TOKEN_INVALID',
+    'DEVICE_TOKEN_MISSING_LOCAL', 'DEVICE_TOKEN_MISSING_FROM_REGISTER',
+]);
+
+export function captureStaleTerminalAuthorization(snapshot: TerminalSessionSnapshot): (() => void) | null {
+    const storage = getStorage();
+    if (!storage) throw Error('SYNC_AUTH_STORAGE_REQUIRED');
+    const read = () => [
+        storage.getItem('clic_sync_auth_status'),
+        storage.getItem('clic_sync_last_auth_error'),
+        storage.getItem(TERMINAL_AUTHORIZATION_BLOCK_STORAGE_KEY),
+        storage.getItem(AUTH_PROJECTION_MARKER),
+    ];
+    const state = read();
+    const [mirrorStatus, mirrorError, takeoverBlock, projection] = state;
+    const statuses = [snapshot.credentials.authStatus, mirrorStatus].map(value => String(value || '').trim().toUpperCase());
+    const errors = [snapshot.credentials.lastAuthError, mirrorError].map(value => String(value || '').trim().toUpperCase());
+    if (takeoverBlock !== null) throw Error('SYNC_AUTH_TAKEOVER_BLOCKED');
+    if (projection === '1') throw Error('SYNC_AUTH_BINDING_PROJECTION_REQUIRED');
+    if (statuses.includes('REVOKED')) throw Error('SYNC_AUTH_REVOCATION_REQUIRES_REVIEW');
+    if (!statuses.some(value => RECOVERABLE_AUTH_STATUS.has(value)) && !errors.some(value => RECOVERABLE_AUTH_ERROR.has(value))) return null;
+    if (statuses.some(value => value && !RECOVERABLE_AUTH_STATUS.has(value) && !['AUTHENTICATED', 'BOUND'].includes(value))
+        || errors.some(value => value && !RECOVERABLE_AUTH_ERROR.has(value))) throw Error('SYNC_AUTH_STALE_STATE_UNSAFE');
+    return () => {
+        if (read().some((value, index) => value !== state[index])) throw Error('SYNC_AUTH_SESSION_CHANGED');
+    };
+}
+
+export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{token:string;expiresAt:string|null;observation:TerminalSessionObservation;recoverStaleAuthorization?:true},assertCurrent:()=>void):Promise<void>=>{
     const operation=credentialWriteQueue.then(async()=>{
         const storage=getStorage();
         const current=()=>{assertCurrent();if(!storage||credentialWriteGeneration!==snapshot.generation||storage.getItem(CREDENTIALS_KEY)!==snapshot.document)throw Error('SYNC_AUTH_SESSION_CHANGED');};
@@ -401,6 +433,10 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
         const openEnded=session.expiresAt==null||session.expiresAt==='';
         if(typeof session.token!=='string'||!session.token||session.token.trim()!==session.token||/[\r\n\t]/.test(session.token)||(!openEnded&&(!Number.isFinite(Date.parse(session.expiresAt as string))||Date.parse(session.expiresAt as string)<=Date.now()))||session.observation.source!=='LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH')throw Error('SYNC_AUTH_SESSION_INVALID');
         const next={...JSON.parse(snapshot.document),syncToken:session.token,syncTokenExpiresAt:openEnded?null:session.expiresAt,syncTokenUpdatedAt:session.observation.observedAt,syncSessionObservation:session.observation};
+        if (session.recoverStaleAuthorization) {
+            next.authStatus = 'AUTHENTICATED';
+            next.lastAuthError = null;
+        }
         // Preferences and localStorage are separate stores: propagate failures/partial persistence, never label them atomic/durable success.
         await writeNativeCredentials(JSON.stringify(next));
         current();
@@ -408,6 +444,10 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
         storage!.setItem('clic_erp_sync_token',session.token);
         mirrorSessionDate(storage!,session.expiresAt);
         storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
+        if (session.recoverStaleAuthorization) {
+            storage!.setItem('clic_sync_auth_status', 'AUTHENTICATED');
+            storage!.removeItem('clic_sync_last_auth_error');
+        }
         credentialWriteGeneration++;
         if (typeof window !== 'undefined') window.dispatchEvent(new Event(TERMINAL_SESSION_RENEWED_EVENT));
     });

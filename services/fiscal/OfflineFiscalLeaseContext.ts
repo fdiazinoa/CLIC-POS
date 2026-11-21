@@ -4,27 +4,31 @@ import {resolveLocalDeviceId} from '../../utils/deviceRevocation';
 import {isTerminalAuthorizationSuperseded} from '../../utils/terminalAuthorizationGuard';
 import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
 import {resolveSyncTarget} from '../sync/SyncProfile';
-import {offlineFiscalFail,type OfflineFiscalLocalAuthority} from './OfflineFiscalLease';
+import type {OfflineFiscalLocalAuthority} from './OfflineFiscalLease';
 
 type FiscalAuthorityConfig = Pick<BusinessConfig, 'companyInfo' | 'terminals'>;
+
+const bindingChanged = (bindingReason: 'LOCAL_DEVICE' | 'LOCAL_AUTHORIZATION' | 'ERP_SCOPE' | 'FISCAL_ISSUER' | 'MASTER_ROLE'): never => {
+ throw Object.assign(new Error('OFFLINE_FISCAL_BINDING_CHANGED'), {bindingReason});
+};
 
 /** Identity and downloaded fiscal assignment only; online bearer lifetime never grants local issuance. */
 export async function offlineFiscalAuthorityFromConfig(config:FiscalAuthorityConfig|null,
  credentials=readTerminalCredentialsSync(),deviceId=resolveLocalDeviceId()):Promise<OfflineFiscalLocalAuthority> {
  const terminalId=credentials.erpTerminalId||credentials.terminalId;
  const terminals=(config?.terminals||[]).filter(t=>(t.config?.erpTerminalId||t.id)===terminalId&&t.config?.currentDeviceId===deviceId);
- if(terminals.length!==1||!deviceId||credentials.deviceId!==deviceId||credentials.identityMigrationRequired
-  ||!credentials.deviceToken||isTerminalAuthorizationSuperseded()
+ if(terminals.length!==1||!deviceId||credentials.deviceId!==deviceId||credentials.identityMigrationRequired)bindingChanged('LOCAL_DEVICE');
+ if(!credentials.deviceToken||isTerminalAuthorizationSuperseded()
   ||/DEVICE_NOT_AUTHORIZED|REVOKED/i.test(credentials.authStatus||'')
-  ||/DEVICE_(TOKEN_INVALID|FORBIDDEN|REVOKED|CHANGED|SUPERSEDED)|TENANT_FORBIDDEN|TERMINAL_INACTIVE|FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)/i.test(credentials.lastAuthError||''))offlineFiscalFail('OFFLINE_FISCAL_BINDING_CHANGED');
+  ||/DEVICE_(TOKEN_INVALID|FORBIDDEN|REVOKED|CHANGED|SUPERSEDED)|TENANT_FORBIDDEN|TERMINAL_INACTIVE|FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)/i.test(credentials.lastAuthError||''))bindingChanged('LOCAL_AUTHORIZATION');
  const terminal=terminals[0],local=terminal.config!,binding=local.erpBinding,fiscal=local.fiscal as any;
  const scope={tenantId:binding?.tenantId!,companyId:binding?.companyId!,storeId:binding?.storeId!,terminalId:terminalId!,deviceId};
  const issuerRnc=String(config.companyInfo?.rnc||'').replace(/[\s.-]/g,'');
  if(Object.values(scope).some(v=>typeof v!=='string'||!v)||(credentials.erpTenantId||credentials.tenantId)!==scope.tenantId
-  ||credentials.companyId!==scope.companyId||credentials.storeId!==scope.storeId
-  ||fiscal?.providerId!=='MSELLER'||fiscal.enabled===false||fiscal.mode!=='ECF'
-  ||![0,1,2].includes(fiscal.environment)||!/^\d{9}(?:\d{2})?$/.test(issuerRnc)||fiscal.credentialKey!==issuerRnc
-  ||(local as any).active===false||(local as any).is_active===false||local.isPrimaryNode!==true||local.governedByMaster===true||local.syncConfig?.mode!=='MASTER')offlineFiscalFail('OFFLINE_FISCAL_BINDING_CHANGED');
+  ||credentials.companyId!==scope.companyId||credentials.storeId!==scope.storeId)bindingChanged('ERP_SCOPE');
+ if(fiscal?.providerId!=='MSELLER'||fiscal.enabled===false||fiscal.mode!=='ECF'
+  ||![0,1,2].includes(fiscal.environment)||!/^\d{9}(?:\d{2})?$/.test(issuerRnc)||fiscal.credentialKey!==issuerRnc)bindingChanged('FISCAL_ISSUER');
+ if((local as any).active===false||(local as any).is_active===false||local.isPrimaryNode!==true||local.governedByMaster===true||local.syncConfig?.mode!=='MASTER')bindingChanged('MASTER_ROLE');
  const target=resolveSyncTarget();
  const bindingHash=await sha256Utf8(JSON.stringify({scope,issuerRnc,deviceFingerprint:await sha256Utf8(credentials.deviceToken),
   fiscal:{providerId:fiscal.providerId,enabled:fiscal.enabled!==false,mode:fiscal.mode,environment:fiscal.environment,credentialKey:fiscal.credentialKey},

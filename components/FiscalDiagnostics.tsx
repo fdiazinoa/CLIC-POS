@@ -38,7 +38,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       setBusy('prepare');
       try {
          const { reauthorizeTerminal } = await import('../services/sync/TerminalReauthorizationService');
-         const result = await reauthorizeTerminal();
+         const result = await reauthorizeTerminal({ reconcileFiscalSession: true });
          setNote(result.message);
          setSnapshot(await readSnapshot());
       } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }

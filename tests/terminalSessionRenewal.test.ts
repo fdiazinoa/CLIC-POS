@@ -70,3 +70,115 @@ test('an invalid or past session date is refused before persisting', async () =>
     assert.equal(result.renewed, false);
   }
 });
+
+const canonicalTerminal = '00000000-0000-4000-8000-000000000001';
+const authResponse = {
+  status: 'AUTHORIZED',
+  success: true,
+  token: 'synthetic-new-session',
+  terminalId: canonicalTerminal,
+  deviceId: scope.deviceId,
+  tenantId: scope.tenantId,
+};
+const installStaleAuth = () => {
+  const current = credentials({ terminalId: canonicalTerminal, lastAuthError: 'DEVICE_SUPERSEDED' });
+  const values = install(current);
+  values.set('CLIC_POS_DEVICE_ID', scope.deviceId);
+  values.set('clic_sync_auth_status', 'AUTHENTICATED');
+  values.set('clic_sync_last_auth_error', 'DEVICE_SUPERSEDED');
+  return { current, values };
+};
+const fiscalRenewalPorts = (current: ReturnType<typeof credentials>, json: () => unknown) => ({
+  target: () => ({ kind: 'ERP_ACTIVE', baseUrl: base, terminalId: canonicalTerminal }),
+  credentials: () => current,
+  fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(new Headers(init?.headers).get('X-Device-Token'), current.deviceToken);
+    return new Response(JSON.stringify(json()), { status: 200 });
+  },
+});
+
+test('fiscal renewal reconciles a stale legacy marker after same-device ERP proof', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  const { current, values } = installStaleAuth();
+  let native = '';
+  setTerminalCredentialNativeWriterForTests(async value => { native = value; });
+  const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => authResponse));
+  assert.deepEqual(result, { renewed: true, reason: 'AUTHORIZATION_RECOVERED', expiresAt: null });
+  const stored = JSON.parse(values.get('clic_terminal_credentials_v1')!);
+  assert.deepEqual(JSON.parse(native), stored);
+  assert.equal(stored.authStatus, 'AUTHENTICATED');
+  assert.equal(stored.lastAuthError, null);
+  assert.equal(values.has('clic_sync_last_auth_error'), false);
+  for (const key of ['deviceId', 'tenantId', 'terminalId', 'companyId', 'storeId', 'deviceToken', 'deviceTokenSource'] as const) {
+    assert.equal(stored[key], current[key]);
+  }
+});
+
+test('session-only renewal leaves legacy authorization markers untouched', async () => {
+  const { current, values } = installStaleAuth();
+  const { renewTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  assert.equal((await renewTerminalSession(fiscalRenewalPorts(current, () => authResponse))).reason, 'OK');
+  assert.equal(JSON.parse(values.get('clic_terminal_credentials_v1')!).lastAuthError, 'DEVICE_SUPERSEDED');
+  assert.equal(values.get('clic_sync_last_auth_error'), 'DEVICE_SUPERSEDED');
+});
+
+test('fiscal recovery rejects changed, missing or contradictory ERP identity', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  for (const proof of [
+    { ...authResponse, deviceId: 'other-device' },
+    { ...authResponse, tenantId: 'other-tenant' },
+    { ...authResponse, terminalId: undefined },
+    { ...authResponse, terminal_id: '00000000-0000-4000-8000-000000000002' },
+  ]) {
+    const { current, values } = installStaleAuth();
+    const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => proof));
+    assert.equal(result.reason, 'SYNC_AUTH_RECOVERY_SCOPE_MISMATCH');
+    assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+    assert.equal(values.get('clic_sync_last_auth_error'), 'DEVICE_SUPERSEDED');
+  }
+});
+
+test('fiscal recovery preserves structured takeover and fiscal revocation blockers', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  for (const [key, value, expected] of [
+    ['clic_terminal_authorization_block', '{}', 'SYNC_AUTH_TAKEOVER_BLOCKED'],
+    ['clic_sync_auth_status', 'REVOKED', 'SYNC_AUTH_REVOCATION_REQUIRES_REVIEW'],
+    ['clic_terminal_auth_envelope_projection_v1', '1', 'SYNC_AUTH_BINDING_PROJECTION_REQUIRED'],
+    ['clic_sync_last_auth_error', 'FISCAL_OFFLINE_LEASE_REVOKED', 'SYNC_AUTH_STALE_STATE_UNSAFE'],
+  ]) {
+    const { current, values } = installStaleAuth();
+    values.set(key, value);
+    const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => assert.fail('should not contact ERP')));
+    assert.equal(result.reason, expected);
+    assert.equal(values.get(key), value);
+    assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+  }
+});
+
+test('fiscal recovery leaves a concurrently received takeover in force', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  const { current, values } = installStaleAuth();
+  setTerminalCredentialNativeWriterForTests(async () => { assert.fail('concurrent block must stop the write'); });
+  const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => {
+    values.set('clic_terminal_authorization_block', '{}');
+    return authResponse;
+  }));
+  assert.equal(result.reason, 'SYNC_AUTH_SESSION_CHANGED');
+  assert.equal(values.get('clic_terminal_authorization_block'), '{}');
+  assert.equal(values.get('clic_sync_last_auth_error'), 'DEVICE_SUPERSEDED');
+  assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+});
+
+test('fiscal recovery cannot use credentials after the POS target changes', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  const { current, values } = installStaleAuth();
+  let erpBase = base;
+  const ports = fiscalRenewalPorts(current, () => {
+    erpBase = 'https://different.example.invalid/api/sync';
+    return authResponse;
+  });
+  ports.target = () => ({ kind: 'ERP_ACTIVE', baseUrl: erpBase, terminalId: canonicalTerminal });
+  const result = await renewFiscalTerminalSession(ports);
+  assert.equal(result.reason, 'SYNC_AUTH_SESSION_CHANGED');
+  assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+});
