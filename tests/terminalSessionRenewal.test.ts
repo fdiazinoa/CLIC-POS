@@ -182,3 +182,23 @@ test('fiscal recovery cannot use credentials after the POS target changes', asyn
   assert.equal(result.reason, 'SYNC_AUTH_SESSION_CHANGED');
   assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
 });
+
+test('fiscal recovery restores native credentials when takeover arrives during the write', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  const { current, values } = installStaleAuth();
+  const originalNative = JSON.stringify({ ...current, nativeMetadata: 'untouched' });
+  let native = originalNative;
+  let writes = 0;
+  setTerminalCredentialNativeReaderForTests(async () => native);
+  setTerminalCredentialNativeWriterForTests(async value => {
+    native = value;
+    if (++writes === 1) values.set('clic_terminal_authorization_block', '{}');
+  });
+  const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => authResponse));
+  assert.equal(result.reason, 'SYNC_AUTH_SESSION_CHANGED');
+  assert.equal(values.get('clic_terminal_authorization_block'), '{}');
+  assert.equal(values.get('clic_sync_last_auth_error'), 'DEVICE_SUPERSEDED');
+  assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+  assert.equal(writes, 2);
+  assert.equal(native, originalNative);
+});

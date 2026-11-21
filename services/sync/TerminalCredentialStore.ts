@@ -437,10 +437,28 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
             next.authStatus = 'AUTHENTICATED';
             next.lastAuthError = null;
         }
-        // Preferences and localStorage are separate stores: propagate failures/partial persistence, never label them atomic/durable success.
-        await writeNativeCredentials(JSON.stringify(next));
+        // The queue fences other credential writes. If recovery loses its guard while
+        // Preferences is writing, restore only when our bytes are still current.
+        const nextDocument = JSON.stringify(next);
+        const nativeBefore = session.recoverStaleAuthorization ? await readNativeCredentialsForProjection() : null;
         current();
-        storage!.setItem(CREDENTIALS_KEY,JSON.stringify(next));
+        try {
+            await writeNativeCredentials(nextDocument);
+            current();
+        } catch (error) {
+            if (session.recoverStaleAuthorization) {
+                try {
+                    if (await readNativeCredentialsForProjection() === nextDocument) {
+                        if (nativeBefore === null) await Preferences.remove({ key: CREDENTIALS_KEY });
+                        else await writeNativeCredentials(nativeBefore);
+                    }
+                } catch {
+                    throw Error('SYNC_AUTH_RECOVERY_NATIVE_RESTORE_FAILED');
+                }
+            }
+            throw error;
+        }
+        storage!.setItem(CREDENTIALS_KEY,nextDocument);
         storage!.setItem('clic_erp_sync_token',session.token);
         mirrorSessionDate(storage!,session.expiresAt);
         storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
