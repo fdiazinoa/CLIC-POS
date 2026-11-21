@@ -286,7 +286,8 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
   // An existing paid attempt keeps its original kind, even when a new authority is downloaded.
-  if(current?.allocation||!current&&await native.allocationAvailability?.(authority)){
+  const isNewAfterAcknowledged = current?.phase === 'ACKNOWLEDGED' && current.operationId !== operationId;
+  if(current?.allocation||(!current||isNewAfterAcknowledged)&&await native.allocationAvailability?.(authority)){
    if(!native.reserveAllocationCheckout)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
    return dispatch?prepareDispatch({...dispatch,cartIdentity,operationId,fiscal:{kind:'ALLOCATION',authority,context:fiscalSaleContext}}):native.reserveAllocationCheckout!(authority,cartIdentity,operationId,fiscalSaleContext);
   }
