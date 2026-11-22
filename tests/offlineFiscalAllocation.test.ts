@@ -149,6 +149,34 @@ test('retained E32 availability still rejects a historical alias of the next NCF
  }finally{f.sql.close();}
 });
 
+test('retained E32 marker blocks an older active allocation owner before prepare or first payment',async()=>{
+ for(const beforePrepare of [true,false]){
+  const f=await fixtureWithLaggingE32();
+  try{
+   seedRetainedE32Receipt(f,146);
+   const checkout=beforePrepare?null:await f.client().reserveOfflineCheckout(identity('new-sale'),'new-sale');
+   const oldScope={...scope,deviceId:'retired-device'},olderGrantId=uuid(990);
+   f.sql.prepare(`INSERT INTO pos_offline_fiscal_allocations_v2
+    (authorization_id,scope_key,authority_json,binding_hash,server_offset_ms,max_local_ms,revoked)
+    VALUES(?,?,?,?,0,0,1)`).run(olderGrantId,JSON.stringify(oldScope),JSON.stringify({...f.grant,authorizationId:olderGrantId,scope:oldScope}),f.local.bindingHash);
+   f.sql.prepare(`INSERT INTO pos_fiscal_pending_numbers_v2
+    (checkout_id,transaction_id,authorization_id,issuer_rnc,environment,buffer_id,allocation_id,ncf,sequence,state)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(uuid(991),uuid(992),olderGrantId,f.grant.issuerRnc,f.grant.environment,uuid(4),f.allocation.id,'E320000000148',148,'PREPARED');
+
+   if(checkout){
+    await assert.rejects(f.client().recordPayment(checkout,'test-payment'),/OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT/);
+    const retained=await f.store.readCheckout(checkout.checkoutId);
+    assert.equal(retained!.phase,'PREPARED');
+    assert.deepEqual(retained!.paymentIds,[]);
+   }else{
+    await assert.rejects(f.client().reserveOfflineCheckout(identity('new-sale'),'new-sale'),/OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT/);
+    assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);
+   }
+   assert.equal(f.count('sync_outbox_v2'),0);
+  }finally{f.sql.close();}
+ }
+});
+
 for(const buffer of [true,false])test(`day1/day8/day30 with expired bearer uses exactly3 assignedNCF, fourth stops before payment; initialbuffer=${buffer}`,async()=>{
  const f=await fixture({buffer}),realNow=Date.now,base=realNow();try{
   for(const [index,day] of [1,8,30].entries()){Date.now=()=>base+day*86400000;const c=await f.client().reserveOfflineCheckout(identity('a'+index),'operation-'+index);assert.equal(c.permit,null);assert.equal(c.allocation!.sequence,index+1);

@@ -181,6 +181,12 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
  }
  allocationFail(expired?'OFFLINE_FISCAL_RANGE_EXPIRED':'OFFLINE_FISCAL_RANGE_EXHAUSTED');
 }
+async function assertRetainedBlockMarkerOwner(sql:SQL,allocationId:string,checkoutId?:string):Promise<void>{
+ const otherOwner=await row(sql,`SELECT checkout_id FROM pos_fiscal_pending_numbers_v2
+  WHERE allocation_id=? AND state IN('PREPARED','EFFECT_POSSIBLE')${checkoutId?' AND checkout_id<>?':''} LIMIT 1`,
+  checkoutId?[allocationId,checkoutId]:[allocationId]);
+ if(otherOwner)allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
+}
 export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocalAuthority,cartIdentity:string,operationId:string,context?:TableFiscalSaleContext,dispatchJoint=false):Promise<FiscalWorkflowCheckoutV2>{
  if((await sql.query("SELECT 1 FROM pos_fiscal_pending_numbers_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id WHERE p.state='ABANDONED' AND c.scope_key=? AND json_extract(c.checkout_json,'$.operationId')=?",[fiscalWorkflowScopeKey(local.scope),operationId])).values?.length)operationId=createUuid();
  const key=fiscalWorkflowScopeKey(local.scope),current=await row(sql,'SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id WHERE p.scope_key=?',[key]);
@@ -207,6 +213,7 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  await assertDirectAllocationCharge(sql,cart,local);
  await assertNoPendingAllocationTable(sql,local.scope,context);
  const planned=await readAllocationSelection(sql,proof.authority,cart.fiscalType,proof.now);
+ if(planned.restoreRetainedBlockMarker)await assertRetainedBlockMarkerOwner(sql,planned.allocation.id);
  await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],planned.config,planned.buffer,planned.selection.ncf,{transactionId:'pending',requireIssuer:true});
  const checkout:FiscalWorkflowCheckoutV2={checkoutId:createUuid(),operationId,transactionId:createUuid(),scopeKey:key,cartIdentity,permit:null,allocation:planned.selection,phase:'PREPARED',paymentIds:[],allocationIssuance:planned.issuance,offlineBindingHash:local.bindingHash,offlineSaleDate:new Date(proof.now).toISOString(),...(context?{fiscalSaleContext:context}:{})};
  await sql.run("INSERT INTO pos_fiscal_pending_numbers_v2(checkout_id,transaction_id,authorization_id,issuer_rnc,environment,account_key,buffer_id,allocation_id,ncf,sequence,state)VALUES(?,?,?,?,?,?,?,?,?,?,'PREPARED')",[checkout.checkoutId,checkout.transactionId,proof.authority.authorizationId,proof.authority.issuerRnc,proof.authority.environment,context?JSON.stringify([local.scope.tenantId,local.scope.companyId,local.scope.storeId,context.accountId]):null,planned.buffer.id,planned.allocation.id,planned.selection.ncf,planned.selection.sequence],false);
@@ -222,6 +229,7 @@ export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCh
  const at=recovery?Date.parse(checkout.offlineEffectAt||''):proof.now;
  if(!Number.isFinite(at)||at<Date.parse(proof.authority.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
  const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation);
+ if(planned.restoreRetainedBlockMarker)await assertRetainedBlockMarkerOwner(sql,planned.allocation.id,checkout.checkoutId);
  return {...proof,planned};
 }
 /** Historical identity proof only: no current availability, clock or pricing reads. */
