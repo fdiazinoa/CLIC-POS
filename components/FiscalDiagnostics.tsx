@@ -11,7 +11,18 @@ const readSnapshot = async () => {
    const diagnostics = await fiscalWorkflowV2Client.diagnostics();
    let reauthorization = { required: false, reason: '' } as { required: boolean; reason: string };
    try { reauthorization = needsTerminalReauthorization(); } catch (error) { reauthorization = { required: true, reason: error instanceof Error ? error.message : String(error) }; }
-   return { ...diagnostics, reauthorization };
+   let e32: { value: string; available: boolean } | null = null;
+   if (diagnostics.authStatus === 'OK' && diagnostics.readiness === 'READY_ALLOCATION') {
+      try {
+         const status = await fiscalWorkflowV2Client.checkoutFiscalStatus('E32');
+         const remaining = status?.remaining ?? 0;
+         e32 = { value: remaining > 0 ? `${remaining.toLocaleString('es-DO')} disponibles` : 'Sin secuencia disponible', available: remaining > 0 };
+      } catch (error) {
+         const code = error instanceof Error && /^[A-Z][A-Z0-9_]{1,79}$/.test(error.message) ? error.message : 'ERROR_DE_VALIDACION';
+         e32 = { value: code, available: false };
+      }
+   }
+   return { ...diagnostics, reauthorization, e32 };
 };
 
 const tone = (ok: boolean) => ok ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-rose-700 bg-rose-50 border-rose-200';
@@ -146,6 +157,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       { label: 'Sesión de la terminal', value: snapshot.session || 'sin vencimiento', ok: true },
       { label: 'Reserva fiscal local', value: snapshot.readiness, ok: snapshot.offlineReady || /READY/.test(snapshot.readiness) },
       { label: 'Comprobantes locales', value: snapshot.lease, ok: !/SIN RESERVA/.test(snapshot.lease) },
+      ...(snapshot.e32 ? [{ label: 'E32 para cobrar', value: snapshot.e32.value, ok: snapshot.e32.available }] : []),
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
       { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin intentos de pago', ok: /sin intento|DECLINED/i.test(snapshot.payments || 'sin intentos de pago') },
       { label: 'Retiro fiscal en el ERP', value: snapshot.erpRetirement || 'sin consultar', ok: snapshot.erpRetirement === 'activo' },
