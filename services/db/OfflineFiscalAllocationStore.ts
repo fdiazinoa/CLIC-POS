@@ -9,11 +9,11 @@ import type {FiscalWorkflowCheckoutV2} from '../fiscal/FiscalWorkflowV2Types';
 import {fiscalWorkflowScopeKey} from '../fiscal/FiscalWorkflowV2Types';
 import type {OfflineFiscalLocalAuthority,TableFiscalSaleContext} from '../fiscal/OfflineFiscalLease';
 import {validateTableFiscalSaleContext} from '../fiscal/OfflineFiscalLease';
-import {allocationFail,validateOfflineFiscalAllocation,assertAllocationMemberTime,type OfflineFiscalAllocation,type OfflineFiscalAllocationSelection} from '../fiscal/OfflineFiscalAllocation';
+import {allocationFail,validateOfflineFiscalAllocation,assertAllocationMemberTime,type OfflineFiscalAllocation,type OfflineFiscalAllocationMember,type OfflineFiscalAllocationSelection} from '../fiscal/OfflineFiscalAllocation';
 import {offlineFiscalAuthorityFromConfig} from '../fiscal/OfflineFiscalLeaseContext';
 import {createUuid} from '../../utils/uuid';
 import {formatFiscalNumber} from '../../utils/fiscalNumber';
-import {snapshotFiscalIssuance} from '../../utils/fiscalIssuance';
+import {fiscalIssuerRnc,snapshotFiscalIssuance} from '../../utils/fiscalIssuance';
 import {validateFiscalBufferReservation} from '../../utils/fiscalBufferAuthority';
 import {planNativeFiscalReceipt} from './NativeFiscalReservation';
 
@@ -112,6 +112,36 @@ async function issuedSequenceFloor(sql:SQL,fiscalRangeId:string,issuerRnc:string
  const last=Number(rows[0]?.last);
  return Number.isSafeInteger(last)&&last>0?last+1:1;
 }
+/** A lagging ERP snapshot can replace only the local end+1 reservation marker.
+ * Prove the current cursor from the immutable receipt before planning its restoration. */
+async function canRestoreRetainedBlockMarker(
+ sql:SQL,authority:OfflineFiscalAllocation,member:OfflineFiscalAllocationMember,
+ allocation:FiscalAllocation,buffer:LocalFiscalBuffer,bufferDocumentId:string,config:BusinessConfig,
+):Promise<boolean>{
+ if(member.ncfType!=='E32'||allocation.status!=='ACTIVE'||allocation.id!==member.allocationId
+  ||!Number.isSafeInteger(allocation.nextNumber)||allocation.nextNumber<member.start
+  ||!Number.isSafeInteger(buffer.currentNumber)||buffer.currentNumber<=member.start
+  ||allocation.nextNumber>buffer.currentNumber||buffer.currentNumber>member.end
+  ||buffer.id!==bufferDocumentId||buffer.type!==member.ncfType||buffer.prefix!==member.prefix
+  ||buffer.terminalId!==authority.scope.terminalId||buffer.allocationId!==member.allocationId
+  ||buffer.fiscalRangeId!==member.fiscalRangeId||buffer.endNumber!==member.end
+  ||(buffer.expiryDate||null)!==member.expiryDate||fiscalIssuerRnc(config)!==authority.issuerRnc)return false;
+
+ const previousNumber=buffer.currentNumber-1;
+ const previousNcf=formatFiscalNumber(buffer.type,member.prefix,previousNumber);
+ const receiptId=JSON.stringify(['DOMINICAN_ECF_V1',authority.issuerRnc,previousNcf]);
+ const saved=await row(sql,"SELECT data FROM documents WHERE collection_name='nativeFiscalReservations' AND doc_id=?",[receiptId]);
+ if(!saved)return false;
+ const receipt=JSON.parse(saved.data);
+ if(receipt.id!==receiptId||receipt.ncf!==previousNcf||receipt.number!==previousNumber
+  ||receipt.issuerRnc!==authority.issuerRnc||receipt.identityStatus!=='PROVEN_ISSUER_RNC'||receipt.prefix!==member.prefix
+  ||typeof receipt.transactionId!=='string'||!receipt.transactionId
+  ||receipt.tenantId!==authority.scope.tenantId||receipt.companyId!==authority.scope.companyId
+  ||receipt.terminalId!==authority.scope.terminalId||receipt.allocationId!==member.allocationId
+  ||receipt.fiscalRangeId!==member.fiscalRangeId)return false;
+
+ return await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix)===buffer.currentNumber;
+}
 export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
@@ -121,7 +151,7 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
  for(const member of members){try{assertAllocationMemberTime(member,time);}catch{expired=true;continue;}
   const allocation=await document<FiscalAllocation>(sql,'fiscalAllocations',member.allocationId),range=await document<FiscalRangeDGII>(sql,'fiscalRanges',member.fiscalRangeId);
   if(allocation.terminalId!==authority.scope.terminalId||!['ACTIVE','EXHAUSTED'].includes(allocation.status)||allocation.releasedAt||allocation.reservedStart!==member.start||allocation.reservedEnd!==member.end||allocation.fiscalRangeId!==member.fiscalRangeId||range.isActive!==true||range.type!==type||range.prefix!==member.prefix||range.startNumber!==member.rangeStart||range.endNumber!==member.rangeEnd||(range.expiryDate||null)!==member.expiryDate)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
-  const buffers=(await sql.query("SELECT data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
+  const buffers=(await sql.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
   const createBuffer=buffers.length===0;
   /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. Sin
@@ -138,14 +168,16 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
   else buffer=JSON.parse(buffers[0].data);
   const refillBuffer=!createBuffer&&buffer.currentNumber>buffer.endNumber&&allocation.nextNumber<=member.end&&allocation.nextNumber>buffer.endNumber;
   if(refillBuffer){const start=await freshStart();buffer={...buffer,currentNumber:start,startNumber:start,endNumber:member.end};}
-  const reserveAllocation=createBuffer||refillBuffer;
+  const restoreRetainedBlockMarker=!createBuffer&&!refillBuffer
+   &&await canRestoreRetainedBlockMarker(sql,authority,member,allocation,buffer,buffers[0].doc_id,config);
+  const reserveAllocation=createBuffer||refillBuffer||restoreRetainedBlockMarker;
   const reservedAllocation=reserveAllocation?{...allocation,nextNumber:member.end+1}:allocation;
   if(buffer.currentNumber>Math.min(buffer.endNumber,member.end))continue;
   const ncf=formatFiscalNumber(type as any,member.prefix,buffer.currentNumber);
   if(selection&&(selection.bufferId!==buffer.id||selection.sequence!==buffer.currentNumber||selection.ncf!==ncf))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
   const nextBuffer={...validateFiscalBufferReservation({business:config,terminalId:authority.scope.terminalId,type:type as any,buffer:{...buffer,expiryDate:''},allocation:reservedAllocation,range:{...range,expiryDate:''},ncf}),expiryDate:buffer.expiryDate};
   const issuance=snapshotFiscalIssuance(config,range,allocation,buffer,ncf);
-  return {config,buffer,allocation,range,nextBuffer,issuance,createBuffer,reserveAllocation,reservedAllocation,remaining:buffer.endNumber-buffer.currentNumber+1+Math.max(0,member.end-Math.max(reservedAllocation.nextNumber,buffer.endNumber+1)+1),selection:{authorizationId:authority.authorizationId,authorityHash:authority.authorityHash,environment:authority.environment,allocationId:member.allocationId,fiscalRangeId:member.fiscalRangeId,ncf,ncfType:type,sequence:buffer.currentNumber,bufferId:buffer.id} as OfflineFiscalAllocationSelection};
+  return {config,buffer,allocation,range,nextBuffer,issuance,createBuffer,restoreRetainedBlockMarker,reserveAllocation,reservedAllocation,remaining:buffer.endNumber-buffer.currentNumber+1+Math.max(0,member.end-Math.max(reservedAllocation.nextNumber,buffer.endNumber+1)+1),selection:{authorizationId:authority.authorizationId,authorityHash:authority.authorityHash,environment:authority.environment,allocationId:member.allocationId,fiscalRangeId:member.fiscalRangeId,ncf,ncfType:type,sequence:buffer.currentNumber,bufferId:buffer.id} as OfflineFiscalAllocationSelection};
  }
  allocationFail(expired?'OFFLINE_FISCAL_RANGE_EXPIRED':'OFFLINE_FISCAL_RANGE_EXHAUSTED');
 }
@@ -267,7 +299,15 @@ export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAut
  const proof=await readAllocation(sql,local);if(!proof)return null;
  const remaining:Record<string,number>={},total:Record<string,number>={};let lastError:unknown;
  for(const member of proof.authority.allocations.filter(m=>!type||m.ncfType===type)){
-  try{const p=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);remaining[member.ncfType]=(remaining[member.ncfType]||0)+p.remaining;total[member.ncfType]=(total[member.ncfType]||0)+member.end-member.start+1;}
+  try{
+   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);
+   if(planned.restoreRetainedBlockMarker){
+    await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],
+     planned.config,planned.buffer,planned.selection.ncf,{requireIssuer:true});
+   }
+   remaining[member.ncfType]=(remaining[member.ncfType]||0)+planned.remaining;
+   total[member.ncfType]=(total[member.ncfType]||0)+member.end-member.start+1;
+  }
   catch(error){lastError=error;}
  }
  if(!Object.values(remaining).some(n=>n>0)&&lastError)throw lastError;

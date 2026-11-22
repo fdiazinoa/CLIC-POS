@@ -11,7 +11,7 @@ import {createContext,Script} from 'node:vm';
 import ts from 'typescript';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 import {FISCAL_WORKFLOW_V2_SCHEMA,NativeFiscalWorkflowV2Store} from '../services/db/FiscalWorkflowV2Store';
-import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../services/db/OfflineFiscalAllocationStore';
+import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA,readAllocationSelection} from '../services/db/OfflineFiscalAllocationStore';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA} from '../services/db/NativeFiscalReservation';
 import {DURABLE_OUTBOX_SCHEMA_SQL} from '../services/sync/DurableOutboxSchema';
 import {offlineFiscalAuthorityFromConfig} from '../services/fiscal/OfflineFiscalLeaseContext';
@@ -23,20 +23,20 @@ import {assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope} from '.
 const uuid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:uuid(1),deviceId:'device'};
 const credentials={...scope,erpTenantId:scope.tenantId,erpTerminalId:scope.terminalId,deviceToken:'synthetic-device',syncToken:'expired',syncTokenExpiresAt:'2020-01-01',authStatus:'BOUND'};
-async function fixture({buffer=true,expiry=null as string|null,download=true}={}){
+async function fixture({buffer=true,expiry=null as string|null,download=true,blockEnd=3}={}){
  const entries=new Map([['clic_terminal_credentials_v1',JSON.stringify(credentials)],['CLIC_POS_DEVICE_ID','device']]);
  Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>entries.get(k)||null,setItem:(k:string,v:string)=>entries.set(k,v),removeItem:(k:string)=>entries.delete(k)},configurable:true});
  const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_RETURN_SCHEMA+FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+DISPATCH_POOL_INSTALL_SCHEMA+DISPATCH_STORE_POLICY_SCHEMA_V2+LARGE_MASTER_SYNC_V3_SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS master_v3_operational_owner \([\s\S]*?\n\);/)![0]+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT);`+NATIVE_FISCAL_RECEIPTS_SCHEMA+OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA);
- const range={id:uuid(2),type:'E32',prefix:'E32',startNumber:1,endNumber:3,isActive:true,expiryDate:expiry||''};
- const allocation={id:uuid(3),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',reservedStart:1,reservedEnd:3,nextNumber:buffer?4:1,status:'ACTIVE',releasedAt:null};
+ const range={id:uuid(2),type:'E32',prefix:'E32',startNumber:1,endNumber:blockEnd,isActive:true,expiryDate:expiry||''};
+ const allocation={id:uuid(3),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',reservedStart:1,reservedEnd:blockEnd,nextNumber:buffer?blockEnd+1:1,status:'ACTIVE',releasedAt:null};
  const config:any={id:'current',companyInfo:{rnc:'101010101'},terminals:[{id:scope.terminalId,config:{erpBinding:scope,erpTerminalId:scope.terminalId,currentDeviceId:'device',isPrimaryNode:true,governedByMaster:false,syncConfig:{mode:'MASTER'},fiscal:{providerId:'MSELLER',mode:'ECF',enabled:true,environment:0,credentialKey:'101010101',fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
  const put=(collection:string,doc:any)=>sql.prepare('INSERT INTO documents(collection_name,doc_id,data)VALUES(?,?,?)').run(collection,doc.id,JSON.stringify(doc));
  put('config',config);put('fiscalRanges',range);put('fiscalAllocations',allocation);put('internalSequences',{id:'SERIES',documentType:'TICKET',prefix:'T-',padding:6,nextNumber:1,active:true});
- if(buffer)put('localFiscalBuffer',{id:uuid(4),type:'E32',prefix:'E32',currentNumber:1,startNumber:1,endNumber:3,expiryDate:expiry||'',terminalId:scope.terminalId,fiscalRangeId:range.id,allocationId:allocation.id});
+ if(buffer)put('localFiscalBuffer',{id:uuid(4),type:'E32',prefix:'E32',currentNumber:1,startNumber:1,endNumber:blockEnd,expiryDate:expiry||'',terminalId:scope.terminalId,fiscalRangeId:range.id,allocationId:allocation.id});
  let fault='';const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>{if(fault&&(q.includes(fault)||v.includes(fault)))throw Error('SYNTHETIC_DISK_FAILURE');return {changes:sql.prepare(q).run(...v)};},execute:async(q:string)=>sql.exec(q),beginTransaction:async()=>sql.exec('BEGIN IMMEDIATE'),commitTransaction:async()=>{sql.exec('COMMIT');if(fault==='COMMIT_ACK_LOST')throw Error('LOST_COMMIT_ACK');},rollbackTransaction:async()=>sql.exec('ROLLBACK'),isTransactionActive:async()=>({result:sql.isTransaction})};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});const store=adapter.fiscalWorkflowStore;
  const local=await offlineFiscalAuthorityFromConfig(config,credentials,'device'),now=Date.now();
- const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(5),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(now-1000).toISOString(),bindingFingerprint:'a'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',padding:10,start:1,end:3,rangeStart:1,rangeEnd:3,expiryDate:expiry}]};
+ const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(5),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(now-1000).toISOString(),bindingFingerprint:'a'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',padding:10,start:1,end:blockEnd,rangeStart:1,rangeEnd:blockEnd,expiryDate:expiry}]};
  const grant:OfflineFiscalAllocation={...unsigned,authorityHash:await allocationHash(unsigned)};if(download)await store.saveAllocation!(grant,local,new Date(now).toISOString());
  const client=()=>createFiscalWorkflowV2Client({store:()=>store,readOfflineAuthority:()=>offlineFiscalAuthorityFromConfig(config,credentials,'device'),readAuth:()=>{throw Error('EXPIRED_TRANSPORT');},fetchImpl:async()=>{throw Error('NO_NETWORK_ALLOWED');}} as any);
  const count=(table:string)=>Number(sql.prepare('SELECT count(*) n FROM '+table).get()!.n);
@@ -49,6 +49,106 @@ async function input(f:Awaited<ReturnType<typeof fixture>>,c:any){
  const birth:any={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:c.allocation.authorizationId,authorityHash:c.allocation.authorityHash,transactionId:c.transactionId,checkoutId:c.checkoutId};
  return {documents:[{collectionName:'internalSequences',document:numbers.series,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:numbers.counter,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})},{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true},...(c.fiscalSaleContext?[{collectionName:'v3TicketSettlements',document:{id:c.fiscalSaleContext.accountId,transactionId:tx.id},requireAbsent:true,v3ExpectedRetainedDocument:{collection:'parkedTickets',id:c.fiscalSaleContext.accountId,expected:String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='parkedTickets' AND doc_id=?").get(c.fiscalSaleContext.accountId)!.data)}}]:[])],outboxEvent:{eventId:uuid(10+Number(c.allocation.sequence)),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,createdAt:tx.date,payload:{transaction:tx,fiscalWorkflowBirth:birth}},fiscalWorkflowCommits:[{checkoutId:c.checkoutId,transactionId:tx.id,birth}],fiscalAllocationPreconditions:await f.store.allocationCommitPreconditions!(c)};
 }
+function seedRetainedE32Receipt(f:Awaited<ReturnType<typeof fixture>>,number:number,overrides:Record<string,unknown>={}){
+ const ncf='E32'+String(number).padStart(10,'0');
+ f.sql.exec('INSERT INTO article_format_wire_write_scope VALUES(1)');
+ try{
+  f.put('nativeFiscalReservations',{id:JSON.stringify(['DOMINICAN_ECF_V1',f.grant.issuerRnc,ncf]),
+   transactionId:uuid(146),issuerRnc:f.grant.issuerRnc,identityStatus:'PROVEN_ISSUER_RNC',ncf,number,prefix:'E32',tenantId:scope.tenantId,
+   companyId:scope.companyId,terminalId:scope.terminalId,allocationId:f.allocation.id,fiscalRangeId:f.range.id,...overrides});
+ }finally{f.sql.exec('DELETE FROM article_format_wire_write_scope');}
+}
+
+async function fixtureWithLaggingE32(){
+ const f=await fixture({blockEnd:25000});
+ f.sql.exec("UPDATE documents SET data=json_set(data,'$.nextNumber',146) WHERE collection_name='fiscalAllocations'");
+ f.sql.exec("UPDATE documents SET data=json_set(data,'$.currentNumber',147) WHERE collection_name='localFiscalBuffer'");
+ return f;
+}
+
+test('retained E32 cursor proves next NCF despite a lagging allocation snapshot without writes or reuse',async()=>{
+ const f=await fixtureWithLaggingE32();
+ try{
+  seedRetainedE32Receipt(f,146);
+  const readOnlyBridge={...f.bridge,run:async()=>{throw new Error('UNEXPECTED_AVAILABILITY_WRITE');}};
+  for(let attempt=0;attempt<2;attempt++){
+   const plan=await readAllocationSelection(readOnlyBridge,f.grant,'E32',Date.now());
+   assert.equal(plan.selection.ncf,'E320000000147');
+   assert.equal(plan.reservedAllocation.nextNumber,25001);
+   assert.equal(plan.nextBuffer.currentNumber,148);
+   assert.equal(plan.remaining,24854);
+   assert.equal(JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='fiscalAllocations'").get()!.data)).nextNumber,146);
+  }
+  assert.deepEqual(await f.client().checkoutFiscalStatus('E32'),{remaining:24854,total:25000});
+  const originalReceipt=f.sql.prepare("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations'").get();
+  const checkout=await f.client().reserveOfflineCheckout(identity('new-sale'),'new-sale');
+  assert.equal(checkout.allocation!.ncf,'E320000000147');
+  assert.deepEqual(checkout.paymentIds,[]);
+  assert.equal(f.count('sync_outbox_v2'),0);
+  assert.deepEqual(f.sql.prepare("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations'").get(),originalReceipt);
+ }finally{f.sql.close();}
+});
+
+test('retained E32 recovery rejects missing proof, foreign predecessor, changed buffer and cursor below issued floor',async()=>{
+ const f=await fixtureWithLaggingE32();
+ try{
+  await assert.rejects(f.client().checkoutFiscalStatus('E32'),/POS_FORMAT_FISCAL_ALLOCATION_REQUIRED/);
+  seedRetainedE32Receipt(f,146,{terminalId:uuid(999)});
+  await assert.rejects(f.client().checkoutFiscalStatus('E32'),/POS_FORMAT_FISCAL_ALLOCATION_REQUIRED/);
+  assert.equal(f.count('pos_fiscal_pending_numbers_v2'),0);
+ }finally{f.sql.close();}
+
+ const changed=await fixtureWithLaggingE32();
+ try{
+  seedRetainedE32Receipt(changed,146);
+  changed.sql.exec("UPDATE documents SET data=json_set(data,'$.expiryDate','2030-12-31') WHERE collection_name='localFiscalBuffer'");
+  await assert.rejects(changed.client().checkoutFiscalStatus('E32'),/POS_FORMAT_FISCAL_ALLOCATION_REQUIRED/);
+  changed.sql.exec("UPDATE documents SET data=json_set(data,'$.expiryDate','') WHERE collection_name='localFiscalBuffer'");
+  seedRetainedE32Receipt(changed,147);
+  await assert.rejects(changed.client().checkoutFiscalStatus('E32'),/POS_FORMAT_FISCAL_ALLOCATION_REQUIRED/);
+  assert.equal(changed.count('sync_outbox_v2'),0);
+ }finally{changed.sql.close();}
+});
+
+test('retained E32 marker restores only in the atomic commit and a retry keeps the original and new receipts',async()=>{
+ const f=await fixtureWithLaggingE32();
+ try{
+  seedRetainedE32Receipt(f,146);
+  const readReceipt=(ncf:string)=>f.sql.prepare("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations' AND json_extract(data,'$.ncf')=?").get(ncf);
+  const marker=()=>JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='fiscalAllocations'").get()!.data)).nextNumber;
+  const original=readReceipt('E320000000146');
+  const checkout=await f.client().reserveOfflineCheckout(identity('new-sale'),'new-sale');
+  await f.client().recordPayment(checkout,'payment-'+checkout.checkoutId);
+  const commit=await input(f,checkout);
+  f.setFault('UPDATE documents SET data=');
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/SYNTHETIC_DISK_FAILURE/);
+  f.setFault('');
+  assert.equal(marker(),146);
+  assert.equal(f.count('sync_outbox_v2'),0);
+  assert.equal(readReceipt('E320000000147'),undefined);
+  assert.deepEqual(readReceipt('E320000000146'),original);
+
+  await f.adapter.commitFinancialTransaction(commit as any);
+  assert.equal(marker(),25001);
+  assert.equal(f.count('sync_outbox_v2'),1);
+  assert.ok(readReceipt('E320000000147'));
+  assert.deepEqual(readReceipt('E320000000146'),original);
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED/);
+  assert.equal(f.count('sync_outbox_v2'),1);
+ }finally{f.sql.close();}
+});
+
+test('retained E32 availability still rejects a historical alias of the next NCF',async()=>{
+ const f=await fixtureWithLaggingE32();
+ try{
+  seedRetainedE32Receipt(f,146);
+  f.put('transactionHistory',{id:'historical-collision',ncf:'E3200000147'});
+  await assert.rejects(f.client().checkoutFiscalStatus('E32'),/NATIVE_FISCAL_HISTORICAL_COLLISION/);
+  await assert.rejects(f.client().reserveOfflineCheckout(identity('new-sale'),'new-sale'),/NATIVE_FISCAL_HISTORICAL_COLLISION/);
+  assert.equal(f.count('pos_fiscal_pending_numbers_v2'),0);
+ }finally{f.sql.close();}
+});
+
 for(const buffer of [true,false])test(`day1/day8/day30 with expired bearer uses exactly3 assignedNCF, fourth stops before payment; initialbuffer=${buffer}`,async()=>{
  const f=await fixture({buffer}),realNow=Date.now,base=realNow();try{
   for(const [index,day] of [1,8,30].entries()){Date.now=()=>base+day*86400000;const c=await f.client().reserveOfflineCheckout(identity('a'+index),'operation-'+index);assert.equal(c.permit,null);assert.equal(c.allocation!.sequence,index+1);
