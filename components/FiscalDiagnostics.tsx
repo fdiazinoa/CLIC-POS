@@ -16,7 +16,9 @@ const readSnapshot = async () => {
       try {
          const status = await fiscalWorkflowV2Client.checkoutFiscalStatus('E32');
          const remaining = status?.remaining ?? 0;
-         e32 = { value: remaining > 0 ? `${remaining.toLocaleString('es-DO')} disponibles` : 'Sin secuencia disponible', available: remaining > 0 };
+         e32 = status?.recovery
+            ? { value: 'Solo recuperación del intento guardado', available: false }
+            : { value: remaining > 0 ? `${remaining.toLocaleString('es-DO')} disponibles` : 'Sin secuencia disponible', available: remaining > 0 };
       } catch (error) {
          const code = error instanceof Error && /^[A-Z][A-Z0-9_]{1,79}$/.test(error.message) ? error.message : 'ERROR_DE_VALIDACION';
          e32 = { value: code, available: false };
