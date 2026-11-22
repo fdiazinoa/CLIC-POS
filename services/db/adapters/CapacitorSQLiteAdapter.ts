@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
@@ -102,6 +103,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     rollback: 'write',
     readBaselineReferenceInventory: 'read',
     getActiveRuntimeVersion: 'read',
+    readOperationalSnapshot: 'read',
     getPragmaSnapshot: 'read',
     getDatabaseSizeBytes: 'read',
     listArticlesPage: 'read',
@@ -209,6 +211,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 this.db = await this.sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
             }
 
+            if (settingsReturnQaEnabled) {
+                const query = this.db.query.bind(this.db);
+                this.db.query = (...args) => /^\s*(SELECT|WITH)\b/i.test(args[0])
+                    ? measureSettingsReturnQa('sqlite.read', () => query(...args), args[0], args[1])
+                    : query(...args);
+            }
             if (!(await this.db.isDBOpen()).result) await this.db.open();
             // A write blocked by another connection must fail (and be retried) instead of hanging
             // forever: an unsettled native write stalls the whole write queue and the cashier can
@@ -554,6 +562,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+    }
+
+    readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
+        return this.withWriteLock(async () => {
+            // Preserve the persisted RNC and terminal JSON types while avoiding unrelated config data.
+            const result = await this.ensureDb().query(`SELECT CASE WHEN json_valid(data) THEN
+                json_object('companyInfo', json_object('rnc', data -> '$.companyInfo.rnc'),
+                            'terminals', data -> '$.terminals') END AS data
+                FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1`, ['config', 'current']);
+            const projected = result.values?.[0]?.data;
+            return typeof projected === 'string' ? JSON.parse(projected) : null;
+        });
     }
 
     getDocumentsByIds<T>(collectionName: string, ids: readonly string[]): Promise<T[]> {

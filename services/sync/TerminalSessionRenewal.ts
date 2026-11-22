@@ -1,6 +1,8 @@
 import { resolveSyncTarget } from './SyncProfile';
 import { validatedLargeMasterSyncV3ErpSyncBase } from './LargeMasterSyncV3BoundTransport';
-import { captureTerminalSessionSnapshot, saveTerminalSessionCAS, readTerminalCredentialsSync, type TerminalCredentials } from './TerminalCredentialStore';
+import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { isCanonicalErpTerminalId } from './terminalIdentity';
+import { captureStaleTerminalAuthorization, captureTerminalSessionSnapshot, saveTerminalSessionCAS, readTerminalCredentialsSync, type TerminalCredentials } from './TerminalCredentialStore';
 
 export type SessionRenewalResult = {
   renewed: boolean;
@@ -18,7 +20,7 @@ export type SessionRenewalPorts = {
   fetchImpl?: typeof fetch;
 };
 
-let inFlight: Promise<SessionRenewalResult> | null = null;
+let inFlight: { fiscalRecovery: boolean; promise: Promise<SessionRenewalResult> } | null = null;
 
 const literal = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.trim() === value && !/[\r\n\t]/.test(value);
 
@@ -29,7 +31,7 @@ const literal = (value: unknown): value is string => typeof value === 'string' &
  * current session without re-pairing: the device token, and therefore the fiscal binding
  * and the offline reserve, stay untouched. An answer without a date is an open-ended session.
  */
-const renew = async (ports: SessionRenewalPorts): Promise<SessionRenewalResult> => {
+const renew = async (ports: SessionRenewalPorts, fiscalRecovery: boolean): Promise<SessionRenewalResult> => {
   const readCredentials = ports.credentials || readTerminalCredentialsSync;
   const readTarget = ports.target || (() => resolveSyncTarget() as RenewalTarget);
   const save = ports.save || saveTerminalSessionCAS;
@@ -47,10 +49,28 @@ const renew = async (ports: SessionRenewalPorts): Promise<SessionRenewalResult> 
   let base: string;
   try { base = validatedLargeMasterSyncV3ErpSyncBase(String(target?.baseUrl || '')); } catch { return { renewed: false, reason: 'ERP_SIN_CONFIGURAR', expiresAt: null }; }
 
-  const snapshot = capture();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
+    const snapshot = capture();
+    const recoveryGuard = fiscalRecovery ? captureStaleTerminalAuthorization(snapshot) : null;
+    const assertCurrent = () => {
+      recoveryGuard?.();
+      if (!recoveryGuard) return;
+      const currentTarget = readTarget();
+      if (currentTarget?.kind !== 'ERP_ACTIVE' || currentTarget.terminalId !== terminalId
+        || validatedLargeMasterSyncV3ErpSyncBase(String(currentTarget.baseUrl || '')) !== base
+        || resolveLocalDeviceId() !== deviceId) throw Error('SYNC_AUTH_SESSION_CHANGED');
+    };
+    if (recoveryGuard) {
+      const bound = snapshot.credentials;
+      if (!isCanonicalErpTerminalId(terminalId) || target?.terminalId !== terminalId || !literal(tenantId)
+        || bound.identityMigrationRequired || (bound.erpTerminalId || bound.terminalId) !== terminalId
+        || (bound.erpTenantId || bound.tenantId) !== tenantId || bound.deviceId !== deviceId
+        || bound.deviceToken !== credentials.deviceToken || resolveLocalDeviceId() !== deviceId
+        || new URL(base).protocol !== 'https:') throw Error('SYNC_AUTH_RECOVERY_SCOPE_REQUIRED');
+      assertCurrent();
+    }
     const response = await fetchImpl(`${base}/auth`, {
       method: 'POST',
       headers: {
@@ -70,6 +90,16 @@ const renew = async (ports: SessionRenewalPorts): Promise<SessionRenewalResult> 
     try { data = await response.json(); } catch { data = null; }
     if (response.status !== 200) return { renewed: false, reason: String(data?.code || data?.error || `HTTP_${response.status}`), expiresAt: null };
     if (!data || data.status !== 'AUTHORIZED' || data.success !== true) return { renewed: false, reason: String(data?.code || 'RESPUESTA_DE_SESION_INVALIDA'), expiresAt: null };
+    if (recoveryGuard) {
+      const matches = (names: string[], expected: string | null) => {
+        const values = names.filter(name => Object.hasOwn(data, name)).map(name => data[name]);
+        return values.length > 0 && values.every(value => value === expected);
+      };
+      if (response.redirected || !matches(['terminalId', 'terminal_id', 'erpTerminalId', 'erp_terminal_id'], terminalId)
+        || !matches(['deviceId', 'device_id'], deviceId) || !matches(['tenantId', 'tenant_id'], tenantId))
+        throw Error('SYNC_AUTH_RECOVERY_SCOPE_MISMATCH');
+      if (Object.hasOwn(data, 'bindingEvidence')) throw Error('SYNC_AUTH_BINDING_PROJECTION_REQUIRED');
+    }
     const token = typeof data.token === 'string' ? data.token : typeof data.syncToken === 'string' ? data.syncToken : '';
     if (!literal(token)) return { renewed: false, reason: 'SESION_SIN_TOKEN', expiresAt: null };
     const declared = typeof data.tokenExpiresAt === 'string' ? data.tokenExpiresAt : null;
@@ -77,6 +107,7 @@ const renew = async (ports: SessionRenewalPorts): Promise<SessionRenewalResult> 
     await save(snapshot, {
       token,
       expiresAt: declared,
+      ...(recoveryGuard ? { recoverStaleAuthorization: true as const } : {}),
       observation: {
         source: 'LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH',
         origin: new URL(base).origin,
@@ -86,16 +117,23 @@ const renew = async (ports: SessionRenewalPorts): Promise<SessionRenewalResult> 
         deviceId,
         observedAt: new Date().toISOString(),
       },
-    }, () => undefined);
-    return { renewed: true, reason: 'OK', expiresAt: declared };
+    }, assertCurrent);
+    return { renewed: true, reason: recoveryGuard ? 'AUTHORIZATION_RECOVERED' : 'OK', expiresAt: declared };
   } catch (error) {
     return { renewed: false, reason: error instanceof Error ? (error.name === 'AbortError' ? 'TIEMPO_DE_ESPERA_AGOTADO' : error.message) : String(error), expiresAt: null };
   } finally { clearTimeout(timer); }
 };
 
-/** Single-flight: two recoveries never race for the same terminal session. */
-export const renewTerminalSession = (ports: SessionRenewalPorts = {}): Promise<SessionRenewalResult> => {
-  if (inFlight) return inFlight;
-  inFlight = renew(ports).finally(() => { inFlight = null; });
-  return inFlight;
+/** Explicit recovery waits for a session-only request already in progress. */
+const renewSingleFlight = (ports: SessionRenewalPorts, fiscalRecovery: boolean): Promise<SessionRenewalResult> => {
+  if (inFlight) {
+    if (!fiscalRecovery || inFlight.fiscalRecovery) return inFlight.promise;
+    return inFlight.promise.then(() => renewSingleFlight(ports, true));
+  }
+  const promise = renew(ports, fiscalRecovery).finally(() => { inFlight = null; });
+  inFlight = { fiscalRecovery, promise };
+  return promise;
 };
+
+export const renewTerminalSession = (ports: SessionRenewalPorts = {}) => renewSingleFlight(ports, false);
+export const renewFiscalTerminalSession = (ports: SessionRenewalPorts = {}) => renewSingleFlight(ports, true);

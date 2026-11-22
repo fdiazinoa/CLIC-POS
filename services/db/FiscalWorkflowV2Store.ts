@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import {verifyReturnStatus} from '../fiscal/FiscalReturnStatus';
 import {assertOfflineFiscalPaymentReceipts} from './OfflineFiscalPaymentAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_SCHEMA,saveAllocation,readAllocation,prepareAllocationCheckout,assertAllocationCheckout,consumeAllocationNumber,assertNoPendingAllocationTable,assertCommittedAllocationReceipt,allocationAvailability,allocationCommitPreconditions} from './OfflineFiscalAllocationStore';
@@ -37,7 +38,23 @@ const fail=():never=>{throw Error('FISCAL_WORKFLOW_NATIVE_CONFLICT');};
 const one=(r:{values?:any[]})=>r.values?.[0];
 export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
  constructor(private readonly connection:()=>Connection,private readonly lock:<T>(operation:()=>Promise<T>)=>Promise<T>){}
- private async transaction<T>(work:(sql:Connection)=>Promise<T>):Promise<T>{return this.lock(async()=>{const sql=this.connection();await sql.execute('BEGIN IMMEDIATE;',false);try{const result=await work(sql);await sql.execute('COMMIT;',false);return result;}catch(error){await sql.execute('ROLLBACK;',false).catch(()=>undefined);throw error;}});}
+ private async transaction<T>(work:(sql:Connection)=>Promise<T>, traceAllocation = false):Promise<T>{
+  return this.lock(() => {
+   const execute = async () => {
+    const sql = this.connection();
+    await sql.execute('BEGIN IMMEDIATE;', false);
+    try {
+     const result = await work(sql);
+     await sql.execute('COMMIT;', false);
+     return result;
+    } catch (error) {
+     await sql.execute('ROLLBACK;', false).catch(() => undefined);
+     throw error;
+    }
+   };
+   return traceAllocation ? measureSettingsReturnQa('fiscal.allocationExecution', execute) : execute();
+  });
+ }
  async refillOperation(scopeKey:string):Promise<string>{return this.transaction(async sql=>{let row=one(await sql.query('SELECT operation_id FROM pos_fiscal_refill_v2 WHERE scope_key=?',[scopeKey]));if(!row){row={operation_id:createUuid()};await sql.run('INSERT INTO pos_fiscal_refill_v2(scope_key,operation_id)VALUES(?,?)',[scopeKey,row.operation_id],false);}return row.operation_id;});}
  async savePermits(scopeKey:string,operationId:string,permits:FiscalWorkflowPermitV2[]):Promise<void>{await this.transaction(async sql=>{const operation=one(await sql.query('SELECT operation_id FROM pos_fiscal_refill_v2 WHERE scope_key=?',[scopeKey]));if(operation?.operation_id!==operationId)fail();if(permits.length>16)fail();for(const permit of permits){const encoded=JSON.stringify(permit);const old=one(await sql.query('SELECT permit_json FROM pos_fiscal_permits_v2 WHERE permit_id=?',[permit.permitId]));if(old){const previous=JSON.parse(old.permit_json);if(JSON.stringify({...previous,state:undefined})!==JSON.stringify({...permit,state:undefined}))fail();continue;}if(permit.state&&permit.state!=='PERMIT')continue;await sql.run("INSERT INTO pos_fiscal_permits_v2(permit_id,transaction_id,scope_key,permit_json,expires_at,state)VALUES(?,?,?,?,?,'AVAILABLE')",[permit.permitId,permit.transactionId,fiscalWorkflowScopeKey(permit.scope),encoded,permit.expiresAt],false);}await sql.run('DELETE FROM pos_fiscal_refill_v2 WHERE scope_key=? AND operation_id=?',[scopeKey,operationId],false);});}
  async checkoutForTable(scopeKey:string,accountId:string,tableId:string):Promise<FiscalWorkflowCheckoutV2|null>{return this.lock(async()=>{
@@ -93,7 +110,9 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
  async saveAllocation(value:import('../fiscal/OfflineFiscalAllocation').OfflineFiscalAllocation,authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,serverTime:string){await this.transaction(sql=>saveAllocation(sql,value,authority,serverTime));}
  async offlineAllocation(authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,id?:string,recovery=false){return this.transaction(sql=>readAllocation(sql,authority,id,recovery));}
  async reserveAllocationCheckout(authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,cartIdentity:string,operationId:string,context?:import('../fiscal/OfflineFiscalLease').TableFiscalSaleContext){return this.transaction(sql=>prepareAllocationCheckout(sql,authority,cartIdentity,operationId,context));}
- async allocationAvailability(authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string){return this.transaction(sql=>allocationAvailability(sql,authority,type));}
+ async allocationAvailability(authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string){
+  return measureSettingsReturnQa('fiscal.allocationQueued', () => this.transaction(sql=>allocationAvailability(sql,authority,type), true));
+ }
  async allocationCommitPreconditions(checkout:FiscalWorkflowCheckoutV2){return this.transaction(sql=>allocationCommitPreconditions(sql,checkout));}
  async allocationDraft(checkout:FiscalWorkflowCheckoutV2){return this.transaction(async sql=>{const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');return {ncf:checkout.allocation!.ncf,fiscalIssuance:checkout.allocationIssuance!,fiscalEnvironment:proof.authority.environment};});}
  async saveOfflineLeasePage(lease:import('../fiscal/OfflineFiscalLease').OfflineFiscalLease,permits:FiscalWorkflowPermitV2[],authority:import('../fiscal/OfflineFiscalLease').OfflineFiscalLocalAuthority,serverTime:string):Promise<void>{await this.transaction(sql=>saveOfflineLeasePage(sql,lease,permits,authority,serverTime));}
