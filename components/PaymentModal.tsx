@@ -1109,6 +1109,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
       if(recoverCommittedReceipt){
          const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));
+         recordCheckoutDiagnostic('CHECKOUT_RECEIPT_LOOKUP_DONE');
          if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}
          assertContext();
       }
@@ -1132,7 +1133,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
       markInteractionStateUpdate(trace, 3);
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
+         recordCheckoutDiagnostic('CHECKOUT_PAYMENT_PREPARATION_START');
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])],voluntaryTip);
+         recordCheckoutDiagnostic('CHECKOUT_PAYMENT_PREPARATION_DONE');
          workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
          const recoveringPayment=Boolean(releasePaymentFence?.recoveryPayments);
@@ -1253,8 +1256,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
             // construction/commit so retries retain the original checkout, tender IDs and effect date.
             // This marker never means that the sale or a receipt has already committed.
             if(!completed&&paymentsToConfirm.length>0){
+               recordCheckoutDiagnostic('CHECKOUT_PAYMENT_EFFECT_START');
                for(const payment of paymentsToConfirm)await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
+               recordCheckoutDiagnostic('CHECKOUT_PAYMENT_EFFECT_DONE');
             }
+            recordCheckoutDiagnostic('CHECKOUT_CONFIRMATION_START');
             const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
             recordCheckoutDiagnostic('PAYMENT_RESULT', { items: txn?.items, total: txn?.total, transactionId: txn?.id, displayId: txn?.displayId, status: txn ? 'RETURNED' : 'NO_TRANSACTION' });
 

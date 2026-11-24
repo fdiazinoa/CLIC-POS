@@ -3,6 +3,9 @@ import type { CheckoutDiagnosticRecord, TrackingSession } from './CheckoutDiagno
 const stages: Record<string, string> = {
     TRACKING_ENABLED: 'CART_CHANGED', TRACKING_DISABLED: 'CART_CHANGED',
     CHECKOUT_OPEN: 'CHECKOUT_OPENED', CHECKOUT_CONFIRM: 'CHECKOUT_OPENED',
+    CHECKOUT_RECEIPT_LOOKUP_DONE: 'CHECKOUT_OPENED', CHECKOUT_CONFIRMATION_START: 'CHECKOUT_OPENED',
+    CHECKOUT_PAYMENT_PREPARATION_START: 'CHECKOUT_OPENED', CHECKOUT_PAYMENT_PREPARATION_DONE: 'CHECKOUT_OPENED',
+    CHECKOUT_PAYMENT_EFFECT_START: 'CHECKOUT_OPENED', CHECKOUT_PAYMENT_EFFECT_DONE: 'CHECKOUT_OPENED',
     PAYMENT_MODAL_CONFIRM: 'CHECKOUT_OPENED', PAYMENT_RESULT: 'PAYMENT_CONFIRMED', PAYMENT_CLOSE: 'CART_CHANGED',
     CART_RENDER: 'CART_CHANGED', CART_CLEAR_REQUEST: 'CART_CLEARED', TABLE_CART_CLEAR: 'TABLE_HYDRATED', TABLE_CART_REPLACE: 'TABLE_HYDRATED',
     TRANSACTION_CREATE_INPUT: 'TRANSACTION_CREATED', TRANSACTION_CREATED: 'TRANSACTION_CREATED',
@@ -14,6 +17,9 @@ const scalar = (v: unknown) => typeof v === 'string' ? v.slice(0,160) : typeof v
 const phaseLabels: Record<string,string> = {
     TRACKING_ENABLED:'Seguimiento activado', TRACKING_DISABLED:'Seguimiento desactivado',
     PAYMENT_MODAL_CONFIRM:'Confirmación solicitada en la pantalla de cobro', CHECKOUT_CONFIRM:'Confirmación recibida por el POS',
+    CHECKOUT_RECEIPT_LOOKUP_DONE:'Búsqueda de recibo previo terminada', CHECKOUT_CONFIRMATION_START:'Confirmación comercial iniciada',
+    CHECKOUT_PAYMENT_PREPARATION_START:'Preparación del pago iniciada', CHECKOUT_PAYMENT_PREPARATION_DONE:'Preparación del pago terminada',
+    CHECKOUT_PAYMENT_EFFECT_START:'Registro durable del intento de pago iniciado', CHECKOUT_PAYMENT_EFFECT_DONE:'Registro durable del intento de pago terminado',
     TRANSACTION_CREATE_INPUT:'Preparación de la transacción', TRANSACTION_CREATED:'Transacción construida',
     FINANCIAL_COMMIT_START:'Guardado de venta y evento iniciado', FINANCIAL_COMMIT_OK:'Transacción guardada', LEGACY_PERSIST_OK:'Transacción guardada',
     PAYMENT_RESULT:'Cobro finalizado', CART_CLEAR_REQUEST:'Limpieza de carrito solicitada',
