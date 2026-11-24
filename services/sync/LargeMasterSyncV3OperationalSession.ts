@@ -1,3 +1,4 @@
+import { markSettingsReturnV3Failure, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
 import { v3OperationalConfigContext, type V3OperationalAuthorityConfig } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
@@ -44,6 +45,11 @@ export type V3CodeMatch = { product: Product; quantity: number; price: number; m
 /** A credit note was issued with a tax classification that the current master no longer declares. */
 export type V3TaxClassificationNotice = { taxId: string; before: string; after: string | null };
 
+// Only scope comparisons use this projection. Legacy layouts still go through the full decoder.
+const readOperationalConfigScope = (source: 'open' | 'identity' | 'acquire' | 'publish' | 'assertCurrent') =>
+  measureSettingsReturnQa(`v3.authority.configScope.${source}`, async (): Promise<V3OperationalAuthorityConfig> =>
+    await dbAdapter.readV3OperationalAuthorityConfig?.() ?? await db.get('config') as unknown as BusinessConfig);
+
 const configContextFlights = new Map<string, Promise<LargeMasterSyncV3OperationalSession>>();
 
 /** One bound, immutable baseline. ACK never removes local stock movements. */
@@ -78,10 +84,10 @@ export class LargeMasterSyncV3OperationalSession {
     const binding = v3BindingKey(identity, v3BaseUrl);
     const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
-    const configScope = (config: BusinessConfig) => v3OperationalConfigContext(config, identity).scope;
-    const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const configScope = (config: V3OperationalAuthorityConfig) => v3OperationalConfigContext(config, identity).scope;
+    const expectedScope = configScope(await readOperationalConfigScope('open'));
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
-      const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
+      const currentScope=configScope(owned ? await owned.readConfig() : await readOperationalConfigScope('identity'));
       if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'ORIGIN');
       if(currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
       try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CREDENTIAL');}
@@ -172,7 +178,7 @@ export class LargeMasterSyncV3OperationalSession {
     let pending = configContextFlights.get(key);
     if (!pending) {
       pending = (async () => {
-        const persisted = await db.get('config') as unknown as BusinessConfig;
+        const persisted = await readOperationalConfigScope('acquire');
         if (v3OperationalConfigContext(persisted, { localTerminalId, ...authority.identity }).scope !== requested.scope)
           throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
         await dbAdapter.connect();
@@ -196,7 +202,7 @@ export class LargeMasterSyncV3OperationalSession {
         await session.assertCurrent();
         const assertPublicationAuthority = async () => {
           if (JSON.stringify(await readAuthority()) !== JSON.stringify(authority)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-          const current = await db.get('config') as unknown as BusinessConfig;
+          const current = await readOperationalConfigScope('publish');
           if (v3OperationalConfigContext(current, { localTerminalId, ...authority.identity }).scope !== requested.scope)
             throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
           if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
@@ -258,8 +264,13 @@ export class LargeMasterSyncV3OperationalSession {
       this.offlineAuthority=local;
     }
     const assertConfig = (config: V3OperationalAuthorityConfig) => {
-      if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
+      try {
+        if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
+        }
+      } catch (error) {
+        if (add) markSettingsReturnV3Failure(add.recheck ? 'add-recheck-config' : 'add-initial-config', error);
+        throw error;
       }
     };
     const readSnapshot = async (): ReturnType<NonNullable<LargeMasterSyncV3Store['readOperationalSnapshot']>> => this.store.readOperationalSnapshot
@@ -279,8 +290,7 @@ export class LargeMasterSyncV3OperationalSession {
 
       if (scopeRequired) {
         const checkConfig = async () => {
-          const projected = add ? await dbAdapter.readV3OperationalAuthorityConfig?.() : undefined;
-          assertConfig(projected ?? await db.get('config') as unknown as BusinessConfig);
+          assertConfig(await readOperationalConfigScope('assertCurrent'));
         };
         if (add) await measureInteractionStage(add.trace, `${stage}_CONFIG_START`, `${stage}_CONFIG_END`, checkConfig);
         else await checkConfig();

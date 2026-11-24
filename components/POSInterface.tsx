@@ -1,4 +1,4 @@
-import { markSettingsReturnQa, measureSettingsReturnQa } from '../settingsReturnQaTrace';
+import { markSettingsReturnQa, markSettingsReturnV3Failure, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import {canViewTicketHistory} from '../utils/ticketHistoryPermission';
 import {LegacyFiscalCheckoutAttempt} from '../services/fiscal/LegacyFiscalCheckoutAttempt';
 import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
@@ -3954,6 +3954,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } catch (error: any) {
          failed = true;
          if (!v3Operational) throw error;
+         markSettingsReturnV3Failure('add', error);
          setErrorToast(describeV3Error(error));
          return false;
       } finally {
@@ -3980,6 +3981,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return addQueue.current.run(() => mounted() && addContext.current === context, add)
          .catch((error: any) => {
             markInteractionStage(trace, 'ADD_QUEUE_END');
+            markSettingsReturnV3Failure('add-ui-queue', error);
             finishInteraction(trace, 'failed');
             setErrorToast(describeV3Error(error));
             return false;

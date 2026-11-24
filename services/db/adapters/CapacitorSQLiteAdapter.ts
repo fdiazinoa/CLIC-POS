@@ -171,10 +171,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 return (...args: Parameters<LargeMasterSyncV3SqliteStore['readOperationalCatalogSale']>) => {
                     const observe = args[3];
                     observe?.('QUEUE_START');
-                    return this.withWriteLock(() => {
+                    return measureSettingsReturnQa('sqlite.read.catalogPrimary', () => this.withWriteLock(() => {
                         observe?.('QUEUE_END');
-                        return target.readOperationalCatalogSale(...args);
-                    });
+                        return measureSettingsReturnQa('sqlite.lane.read.catalogPrimary', () => target.readOperationalCatalogSale(...args));
+                    }));
                 };
             }
             return (...args:any[])=>this.withWriteLock(async()=>{
@@ -286,13 +286,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {
-        const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName));
+        const docs = await this.withWriteLock(() => collectionName === 'config'
+            ? measureSettingsReturnQa('sqlite.lane.read.fullConfig', () => this.readStoredDocuments(collectionName))
+            : this.readStoredDocuments(collectionName));
         return this.fromStoredDocuments(collectionName, docs);
     }
 
     /** Same decoder, compaction and current-document selection as getCollection, under an existing owner. */
     private async readConfigOwned():Promise<import('../../../types').BusinessConfig> {
-        const docs=await this.readStoredDocuments('config');
+        const docs = await measureSettingsReturnQa('sqlite.lane.read.ownedFullConfig', () => this.readStoredDocuments('config'));
         if(!docs.some(doc=>doc&&typeof doc==='object'&&!Array.isArray(doc)&&doc.id!=='_db_initialized'&&doc.id!=='config_metadata')){
             throw new Error('SYNC_V3_BINDING_CHANGED');
         }
@@ -497,7 +499,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await this.executeUnlocked([...replaceCollections.flatMap(name => this.collectionReplacementStatements(name,documents.filter(d=>d.collectionName===name).map(d=>d.document.id),now)), ...documents.map(({ collectionName, document }) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
-            })), ...fiscalStatements], needsFinancialPrecondition ? precondition : undefined);
+            })), ...fiscalStatements], needsFinancialPrecondition ? precondition : undefined,
+                false, undefined, 'atomicDocuments');
             for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
         });
     }
@@ -1118,7 +1121,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 range.lastReportedNumber, range.progressPending ? 1 : 0, range.blockedReason ?? null,
                 range.terminalId ?? null,
             ],
-        })));
+        })), 'masterNumberRanges');
     }
 
     async commitNumberedMasterCreation(input: NumberedMasterCommitInput): Promise<NumberedMasterCommitResult> {
@@ -1262,7 +1265,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
                 await this.ensureDb().execute(sql);
             },
-            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement:s.statement,values:s.values || []}))),
+            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement:s.statement,values:s.values || []})),
+                undefined, false, undefined, 'articleFormats'),
             query: async <T>(sql:string,values:(string|number|null)[]) => (await this.ensureDb().query(sql,values)).values as T[] || [],
         };
         const port: FormatSQL = {
@@ -1660,7 +1664,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             })),
         ];
 
-        await this.executeSetOrRun(statements);
+        await this.executeSetOrRun(statements, collectionName === 'config' ? 'replaceConfig' : 'replaceDocuments');
     }
 
     private async upsertStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
@@ -1680,7 +1684,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ],
         }));
 
-        await this.executeSetOrRun(statements);
+        await this.executeSetOrRun(statements, collectionName === 'config' ? 'upsertConfig' : 'upsertDocuments');
     }
 
     private toDocumentRows(collectionName: string, docs: any[]): Array<{ docId: string; data: string }> {
@@ -1702,9 +1706,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return Array.from(rowsById.values());
     }
 
-    private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
+    private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>,
+        source: 'replaceConfig' | 'replaceDocuments' | 'upsertConfig' | 'upsertDocuments' | 'masterNumberRanges'): Promise<void> {
         if (!statements.length) return;
-        await this.withWriteLock(() => this.executeUnlocked(statements));
+        await this.withWriteLock(() => this.executeUnlocked(statements, undefined, false, undefined, source));
     }
 
     async isV3TicketClosed(id: string): Promise<boolean> {
@@ -1970,7 +1975,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
     }
 
-    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void|false>, nativeFinancial=false,postcondition?:()=>Promise<void>): Promise<void> {
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void|false>, nativeFinancial = false,
+        postcondition?: () => Promise<void>, source = 'other'): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
@@ -1980,7 +1986,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if(nativeFinancial){await this.withNativeTransaction(async()=>{const proceed=await precondition?.();if(proceed!==false)for(const entry of executable)await db.run(entry.statement,entry.values,false);await postcondition?.();});return;}
 
         if (!precondition && !postcondition && typeof (db as any).executeSet === 'function') {
-            await (db as any).executeSet(executable, true, 'no');
+            await measureSettingsReturnQa(`sqlite.lane.executeSet.${source}.${executable.length}`,
+                () => db.executeSet(executable, true, 'no'));
             return;
         }
 

@@ -172,6 +172,35 @@ test('SQLite authority projection matches the full decoder and declines ambiguou
   } finally { f.db.close(); }
 });
 
+test('V3 session acquisition and publication read only authority fields on canonical storage', async () => {
+  const f = await fixture();
+  try {
+    let fullReads = 0, projections = 0;
+    const getCollection = f.adapter.getCollection.bind(f.adapter);
+    const readProjection = f.adapter.readV3OperationalAuthorityConfig.bind(f.adapter);
+    f.adapter.getCollection = (...args) => {
+      if (args[0] === 'config') fullReads++;
+      return getCollection(...args);
+    };
+    f.adapter.readV3OperationalAuthorityConfig = () => { projections++; return readProjection(); };
+
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    assert.ok(projections >= 4, 'the open and publication fences each read current authority');
+    assert.equal(fullReads, 0);
+
+    f.db.prepare("INSERT INTO documents(collection_name,doc_id,data,sort_order,updatedAt) VALUES('config','metadata',?,1,'test')")
+      .run('{"id":"config_metadata"}');
+    await session.assertCurrent();
+    assert.equal(fullReads, 1, 'an ambiguous layout still uses the full decoder');
+
+    const changed = structuredClone(f.env.config);
+    changed.terminals[0].config.pricing.allowedTariffIds = [id(999)];
+    f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(changed));
+    await assert.rejects(session.assertCurrent(), /SYNC_V3_BINDING_CHANGED/);
+    assert.equal(fullReads, 2);
+  } finally { f.close(); }
+});
+
 test('adding a line still checks fresh config and inventory snapshots with the projection', async () => {
   const f = await fixture();
   try {
