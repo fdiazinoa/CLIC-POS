@@ -953,8 +953,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if(input.fiscalWorkflowCommits?.length!==1||new Set(input.documents.map(d=>JSON.stringify([d.collectionName,d.document.id]))).size!==input.documents.length||JSON.stringify(source.document)!==JSON.stringify(history.document))throw Error('OFFLINE_FISCAL_ATOMIC_SOURCE_REQUIRED');
               const tx=source.document as unknown as import('../../../types').Transaction;
               if(tx.documentType!=='REFUND'){
-                const seriesRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?",[tx.seriesId])).values?.[0]?.data;
-                const counterRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='globalSequenceCounter' AND doc_id='value'")).values?.[0]?.data;
+                const rows=await this.ensureDb().query(`SELECT
+                  (SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?) AS series_data,
+                  (SELECT data FROM documents WHERE collection_name='globalSequenceCounter' AND doc_id='value') AS counter_data`,[tx.seriesId]);
+                const seriesRaw=rows.values?.[0]?.series_data ?? undefined;
+                const counterRaw=rows.values?.[0]?.counter_data ?? undefined;
                 const numbers=planFinancialNumbers({seriesId:tx.seriesId,documentType:'TICKET',global:true},seriesRaw?JSON.parse(seriesRaw):undefined,counterRaw?JSON.parse(counterRaw):undefined);
                 const seriesMutation=input.documents.filter(d=>d.collectionName==='internalSequences'),counterMutation=input.documents.filter(d=>d.collectionName==='globalSequenceCounter');
                 if(!tx.seriesId||seriesMutation.length!==1||counterMutation.length!==1||JSON.stringify([tx.displayId,tx.seriesNumber,tx.globalSequence])!==JSON.stringify([numbers.result.displayId,numbers.result.seriesNumber,numbers.result.globalSequence])||JSON.stringify(seriesMutation[0].document)!==JSON.stringify(numbers.series)||seriesMutation[0].expectedDocument!==seriesRaw||JSON.stringify(counterMutation[0].document)!==JSON.stringify(numbers.counter)||(counterRaw?counterMutation[0].expectedDocument!==counterRaw:counterMutation[0].requireAbsent!==true))throw Error('OFFLINE_FISCAL_NUMBER_PLAN_CHANGED');
