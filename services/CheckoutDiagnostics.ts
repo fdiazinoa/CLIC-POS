@@ -1,3 +1,4 @@
+import { beginCheckoutDocumentReads, discardCheckoutDocumentReads, finishCheckoutDocumentReads } from './CheckoutDocumentReadTrace';
 import { v4 as uuidv4 } from 'uuid';
 import { diagnosticEvent } from './CheckoutDiagnosticDelivery';
 import {
@@ -12,6 +13,7 @@ export type CheckoutDiagnosticInput = {
     transactionId?: unknown; displayId?: unknown; eventId?: unknown; aggregateId?: unknown;
     tableId?: unknown; orderId?: unknown; terminalId?: unknown; deviceId?: unknown;
     status?: unknown; reason?: unknown; summaryItemCount?: unknown; expectedItemCount?: unknown;
+    documentReads?: ReturnType<typeof finishCheckoutDocumentReads>;
 };
 export interface TrackingSession { id: string; startedAt: string; expiresAt: string; versionName: string | null; versionCode: number | null; terminalId: string | null; deviceId: string | null; environment?: CheckoutDiagnosticEnvironment }
 export type CaptureContext = { mode: 'RETAIL' | 'RESTAURANT' | null; versionName: string | null; versionCode: number | null };
@@ -63,6 +65,7 @@ export class CheckoutDiagnosticRecorder {
             if (stage === 'FINANCIAL_COMMIT_OK' || stage === 'LEGACY_PERSIST_OK') this.committed = true;
             if (stage === 'PAYMENT_CLOSE') this.paymentOpen = false;
             const data: Record<string, unknown> = {};
+            if (input.documentReads) data.documentReads = input.documentReads;
             for (const key of fields) if (input[key] !== undefined) data[key] = text(input[key]);
             for (const key of ['total', 'summaryItemCount', 'expectedItemCount'] as const) {
                 if (input[key] !== undefined) data[key] = number(input[key]);
@@ -249,6 +252,7 @@ export const setCheckoutTrackingEnabled = (enabled: boolean, metadata: Partial<T
     if (!enabled && activeSession) checkoutDiagnostics.record('TRACKING_DISABLED');
     if (enabled) startCheckoutPerformanceCapture();
     else stopCheckoutPerformanceCapture();
+    discardCheckoutDocumentReads();
     activeSession = session;
     activeUntil = session ? Date.parse(session.expiresAt) : 0;
     checkoutDiagnostics.setSession(session);
@@ -259,13 +263,21 @@ export const recordCheckoutDiagnostic = (stage: string, input?: CheckoutDiagnost
     // Disabled path: no projection, storage, timers, logging or network.
     if (!activeSession) return;
     if (Date.now() >= activeUntil) {
+        discardCheckoutDocumentReads();
         activeSession = null;
         activeUntil = 0;
         checkoutDiagnostics.setSession(null);
         stopCheckoutPerformanceCapture();
         return;
     }
+    const transactionId = typeof input?.transactionId === 'string' ? input.transactionId : undefined;
+    if (stage === 'TRANSACTION_CREATED' && transactionId) beginCheckoutDocumentReads(transactionId);
+    if (stage === 'CHECKOUT_OPEN' || stage === 'PAYMENT_CLOSE' || stage === 'PAYMENT_RESULT') discardCheckoutDocumentReads();
     checkoutDiagnostics.record(stage, input);
+    if (stage === 'OUTBOX_BUILD') {
+        const documentReads = finishCheckoutDocumentReads(transactionId);
+        if (documentReads) checkoutDiagnostics.record('CHECKOUT_DOCUMENT_READS', { transactionId: input?.transactionId, documentReads });
+    }
 };
 export const readCheckoutDiagnostics = async () => {
     await checkoutDiagnostics.flush();

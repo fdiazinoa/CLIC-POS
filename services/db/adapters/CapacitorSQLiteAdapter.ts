@@ -1,3 +1,4 @@
+import { attributeCheckoutDocumentRead, captureCheckoutDocumentReader, withCheckoutDocumentReadTrace } from '../../CheckoutDocumentReadTrace';
 import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
@@ -217,6 +218,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     ? measureSettingsReturnQa('sqlite.read', () => query(...args), args[0], args[1])
                     : query(...args);
             }
+            this.db.query = withCheckoutDocumentReadTrace(this.db.query.bind(this.db));
             if (!(await this.db.isDBOpen()).result) await this.db.open();
             // A write blocked by another connection must fail (and be retried) instead of hanging
             // forever: an unsettled native write stalls the whole write queue and the cashier can
@@ -271,7 +273,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {
-        const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName));
+        const reader = captureCheckoutDocumentReader('getCollection');
+        const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName, reader));
         return this.fromStoredDocuments(collectionName, docs);
     }
 
@@ -561,7 +564,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
-        return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+        const reader = captureCheckoutDocumentReader('getDocument');
+        return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id,reader));
     }
 
     readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
@@ -577,22 +581,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     getDocumentsByIds<T>(collectionName: string, ids: readonly string[]): Promise<T[]> {
+        const reader = captureCheckoutDocumentReader('getDocumentsByIds');
         return this.withWriteLock(async () => {
             if (!ids.length) return [];
             if (ids.length > 100) throw new Error('DOCUMENT_BATCH_READ_LIMIT');
             const result = await this.ensureDb().query(
                 `SELECT data FROM documents WHERE collection_name = ? AND doc_id IN (${ids.map(() => '?').join(',')})`,
-                [collectionName, ...ids],
+                attributeCheckoutDocumentRead([collectionName, ...ids], reader),
             );
             return (result.values || []).map(row => JSON.parse(String(row.data)) as T);
         });
     }
 
-    private async getDocumentUnlocked<T>(collectionName: string, id: string): Promise<T | null> {
+    private async getDocumentUnlocked<T>(collectionName: string, id: string, reader?: string): Promise<T | null> {
         const db = this.ensureDb();
         const result = await db.query(
             'SELECT data FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1',
-            [collectionName, id]
+            attributeCheckoutDocumentRead([collectionName, id], reader)
         );
         const row = Array.isArray(result?.values) ? result.values[0] : null;
         const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
@@ -1493,7 +1498,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     }
 
-    private async readStoredDocuments(collectionName: string): Promise<any[]> {
+    private async readStoredDocuments(collectionName: string, reader?: string): Promise<any[]> {
         const db = this.ensureDb();
         const docs: any[] = [];
         let offset = 0;
@@ -1501,7 +1506,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         while (true) {
             const result = await db.query(
                 'SELECT doc_id, length(data) AS data_length, CASE WHEN length(data) <= ? THEN data ELSE NULL END AS data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?',
-                [MAX_DOCUMENT_JSON_BYTES, collectionName, DOCUMENT_READ_BATCH_SIZE, offset]
+                attributeCheckoutDocumentRead([MAX_DOCUMENT_JSON_BYTES, collectionName, DOCUMENT_READ_BATCH_SIZE, offset], reader)
             );
             const rows = Array.isArray(result?.values) ? result.values : [];
             if (rows.length === 0) break;
@@ -1515,7 +1520,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     for (let start = 1; start <= length; start += CONFIG_READ_CHUNK_SIZE) {
                         const chunk = await db.query(
                             'SELECT substr(data, ?, ?) AS data FROM documents WHERE collection_name = ? AND doc_id = ?',
-                            [start, CONFIG_READ_CHUNK_SIZE, collectionName, storedRow.doc_id]
+                            attributeCheckoutDocumentRead([start, CONFIG_READ_CHUNK_SIZE, collectionName, storedRow.doc_id], reader)
                         );
                         const text = chunk.values?.[0]?.data;
                         if (typeof text !== 'string') throw new Error('No se pudo leer la configuración SQLite completa.');
