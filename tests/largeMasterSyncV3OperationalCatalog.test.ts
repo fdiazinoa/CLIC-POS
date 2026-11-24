@@ -1,3 +1,4 @@
+import { beginPosInteraction } from '../utils/interactionPerformance';
 import test from 'node:test';
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
@@ -117,6 +118,19 @@ test('rejects a result if the independent inventory snapshot changes mid-read', 
   const changing = fixture({ advanceInventoryAfterBalance: true });
   const catalog = await LargeMasterSyncV3OperationalCatalog.open(changing.ready, 'T1', 'W');
   await assert.rejects(() => catalog.search('Agua'), /SYNC_V3_INVENTORY_NOT_READY/);
+});
+
+test('traced article lookup still rejects inventory drift after reading the article and warehouse data', async () => {
+  const { ready } = fixture({ advanceInventoryAfterBalance: true });
+  const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
+  const trace = beginPosInteraction('ADD_TICKET_ITEM');
+  await assert.rejects(() => catalog.get('A', trace), /SYNC_V3_INVENTORY_NOT_READY/);
+  assert.deepEqual(Object.keys(trace.stages).filter(stage => stage.startsWith('ADD_CATALOG')), [
+    'ADD_CATALOG_SNAPSHOT_BEFORE_START', 'ADD_CATALOG_SNAPSHOT_BEFORE_END',
+    'ADD_CATALOG_SALE_START', 'ADD_CATALOG_SALE_END',
+    'ADD_CATALOG_SUPPORT_START', 'ADD_CATALOG_SUPPORT_END',
+    'ADD_CATALOG_SNAPSHOT_AFTER_START', 'ADD_CATALOG_SNAPSHOT_AFTER_END',
+  ]);
 });
 
 test('authoritative image references survive get/search/page and reject inline media without legacy reads', async () => {

@@ -74,7 +74,7 @@ const v3ErrorCodes = new Set([
 ]);
 const v3BindingReasons = new Set(['IDENTITY', 'ORIGIN', 'CREDENTIAL', 'CONFIG_SCOPE', 'OWNER', 'TRANSITION', 'RUNTIME']);
 
-export function markSettingsReturnV3Failure(stage: 'resume' | 'acquire', error: unknown) {
+export function markSettingsReturnV3Failure(stage: 'resume' | 'acquire' | 'add' | 'add-ui-queue' | 'add-initial-config' | 'add-recheck-config', error: unknown) {
   if (!trace) return;
   const value = error as { code?: unknown; message?: unknown; bindingReason?: unknown } | null;
   const rawCode = value?.code ?? value?.message;
