@@ -564,6 +564,41 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
     }
 
+    readV3OperationalAuthorityConfig(): Promise<import('../../sync/LargeMasterSyncV3OperationalConfigScope').V3OperationalAuthorityConfig | null> {
+        return this.withWriteLock(async () => {
+            // Other config layouts go through the legacy reader, which owns the precedence and error rules.
+            // JSON values preserve types and complete policy objects for the shared JS scope check.
+            const result = await this.ensureDb().query(`
+                SELECT CASE WHEN json_valid(doc.data) THEN CASE
+                    WHEN (doc.data ->> '$.id') = 'current'
+                    AND json_type(doc.data, '$.terminals') = 'array'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM json_each(doc.data, '$.terminals') AS terminal
+                        WHERE CASE WHEN terminal.type = 'object' THEN json_type(terminal.value, '$.config') END IS NOT 'object'
+                    )
+                    THEN (SELECT json_group_array(json_object(
+                        'id', terminal.value -> '$.id',
+                        'config', json_object(
+                            'erpTerminalId', terminal.value -> '$.config.erpTerminalId',
+                            'currentDeviceId', terminal.value -> '$.config.currentDeviceId',
+                            'erpBinding', terminal.value -> '$.config.erpBinding',
+                            'inventoryScope', terminal.value -> '$.config.inventoryScope',
+                            'pricing', terminal.value -> '$.config.pricing',
+                            'fiscal', terminal.value -> '$.config.fiscal'
+                        )
+                    )) FROM json_each(doc.data, '$.terminals') AS terminal)
+                END END AS terminals
+                FROM documents AS doc
+                WHERE doc.collection_name = ? AND doc.doc_id = ?
+                AND NOT EXISTS (
+                    SELECT 1 FROM documents AS sibling
+                    WHERE sibling.collection_name = doc.collection_name AND sibling.doc_id <> doc.doc_id
+                )`, ['config', 'current']);
+            const terminals = result.values?.[0]?.terminals;
+            return typeof terminals === 'string' ? { terminals: JSON.parse(terminals) } : null;
+        });
+    }
+
     readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
         return this.withWriteLock(async () => {
             // Preserve the persisted RNC and terminal JSON types while avoiding unrelated config data.

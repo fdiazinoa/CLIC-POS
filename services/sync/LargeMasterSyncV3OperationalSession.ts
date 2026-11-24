@@ -239,7 +239,7 @@ export class LargeMasterSyncV3OperationalSession {
     }
   }
 
-  async assertCurrent(): Promise<void> {
+  async assertCurrent(add?: { trace: PosInteractionTrace; recheck?: boolean }): Promise<void> {
     assertLargeMasterSyncV3NativeAndroid();
     try{
       const current=readLargeMasterSyncV3BoundIdentity();
@@ -250,17 +250,30 @@ export class LargeMasterSyncV3OperationalSession {
       if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=local;
     }
-    if(this.expectedConfigScope!==undefined){
-    const config=await db.get('config') as unknown as BusinessConfig;
-    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+    if (this.expectedConfigScope !== undefined) {
+      const checkConfig = async () => {
+        const projected = add ? await dbAdapter.readV3OperationalAuthorityConfig?.() : undefined;
+        const config = projected ?? await db.get('config') as unknown as BusinessConfig;
+        if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
+        }
+      };
+      if (add) {
+        const stage = add.recheck ? 'ADD_RECHECK_CONFIG' : 'ADD_AUTHORITY_CONFIG';
+        await measureInteractionStage(add.trace, `${stage}_START`, `${stage}_END`, checkConfig);
+      } else await checkConfig();
     }
-    const { active, inventory, owner } = this.store.readOperationalSnapshot
-      ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
+    const readSnapshot = async () => this.store.readOperationalSnapshot
+      ? this.store.readOperationalSnapshot(this.ready.runtime.version)
       : {
         active: await this.store.getActiveRuntimeVersion(),
         inventory: await this.ready.runtime.getInventorySnapshotVersion(),
         owner: await this.store.getOperationalOwner!(),
       };
+    const snapshotStage = add?.recheck ? 'ADD_RECHECK_SNAPSHOT' : 'ADD_AUTHORITY_SNAPSHOT';
+    const { active, inventory, owner } = add
+      ? await measureInteractionStage(add.trace, `${snapshotStage}_START`, `${snapshotStage}_END`, readSnapshot)
+      : await readSnapshot();
     if (active?.syncId !== this.ready.runtime.version.syncId
       || active.syncVersion !== this.ready.runtime.version.syncVersion
       || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor
@@ -414,7 +427,7 @@ export class LargeMasterSyncV3OperationalSession {
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
     intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false,
     onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void, addTrace?: PosInteractionTrace): Promise<V3RetainedContext | undefined> {
-    if (addTrace) await measureInteractionStage(addTrace, 'ADD_AUTHORITY_START', 'ADD_AUTHORITY_END', () => this.assertCurrent());
+    if (addTrace) await measureInteractionStage(addTrace, 'ADD_AUTHORITY_START', 'ADD_AUTHORITY_END', () => this.assertCurrent({ trace: addTrace }));
     else await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
@@ -436,7 +449,7 @@ export class LargeMasterSyncV3OperationalSession {
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
     let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
     const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();
-    const sourceFor = async (line: CartItem) => {
+    const sourceFor = async (line: CartItem, trace?: PosInteractionTrace) => {
       const stamp = line.v3SaleAuthority;
       if (!stamp || stamp.binding !== this.binding || stamp.warehouseId !== warehouseId || stamp.tariffId !== tariffId
         || stamp.taxIncluded !== authority.taxIncluded || !sameV3StockAuthority(stamp, anchor)) {
@@ -445,7 +458,7 @@ export class LargeMasterSyncV3OperationalSession {
       // A refund is authorized by the independently read original even when its catalog is still current.
       if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
-        return currentCatalog.get(line.id);
+        return currentCatalog.get(line.id, trace);
       }
       if (!refund) assertV3RetainedLine(line, retained);
       // Delivery of an already committed invoice is distinct from a new sale/refund checkout.
@@ -475,7 +488,7 @@ export class LargeMasterSyncV3OperationalSession {
         runtime: LargeMasterSyncV3Runtime.retained(this.store, { syncId: stamp.syncId, syncVersion: stamp.syncVersion, contractVersion: 2 }),
         inventoryVersion: anchor.version, inventoryCursor: anchor.cursor,
         inventorySyncId: anchor.syncId, inventorySyncVersion: anchor.syncVersion }, tariffId, warehouseId));
-      return sourceCatalogs.get(key)!.get(line.id);
+      return sourceCatalogs.get(key)!.get(line.id, trace);
     };
     // Only an independently read retained account permits mixed source generations.
     const fiscalLines = retained ? lines.map(line => ({ ...line, v3SaleAuthority: authority })) : lines;
@@ -488,7 +501,7 @@ export class LargeMasterSyncV3OperationalSession {
         && stamp.syncVersion === this.ready.runtime.version.syncVersion;
       // Trace the first line's reads with the same route the validator already uses.
       const source = addTrace && addTrace.stages.ADD_CATALOG_READ_START === undefined
-        ? await measureInteractionStage(addTrace, 'ADD_CATALOG_READ_START', 'ADD_CATALOG_READ_END', () => sourceFor(line))
+        ? await measureInteractionStage(addTrace, 'ADD_CATALOG_READ_START', 'ADD_CATALOG_READ_END', () => sourceFor(line, addTrace))
         : await sourceFor(line);
       const current = currentGeneration ? source : await currentCatalog.get(line.id);
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
@@ -513,7 +526,7 @@ export class LargeMasterSyncV3OperationalSession {
         if((demand.get(line.id) || 0)>stock.stock)throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
       }
     }
-    if (addTrace) await measureInteractionStage(addTrace, 'ADD_RECHECK_START', 'ADD_RECHECK_END', () => this.assertCurrent());
+    if (addTrace) await measureInteractionStage(addTrace, 'ADD_RECHECK_START', 'ADD_RECHECK_END', () => this.assertCurrent({ trace: addTrace, recheck: true }));
     else await this.assertCurrent();
     return retained;
   }
