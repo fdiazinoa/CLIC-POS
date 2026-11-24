@@ -2,8 +2,14 @@ import type { BusinessConfig } from '../../types';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 type Selector = { localTerminalId?: string; terminalId?: string; deviceId?: string; tenantId?: string };
+type Terminal = BusinessConfig['terminals'][number];
+type AuthorityTerminal = Pick<Terminal, 'id'> & {
+  config: Pick<Terminal['config'], 'erpTerminalId' | 'currentDeviceId' | 'erpBinding' | 'inventoryScope' | 'pricing' | 'fiscal'>;
+};
+export type V3OperationalAuthorityConfig = { terminals: AuthorityTerminal[] };
+
 /** The complete immutable authority scope; presentation metadata is intentionally retained. */
-export function v3OperationalConfigContext(config: BusinessConfig, selector: Selector) {
+export function v3OperationalConfigContext<T extends AuthorityTerminal>(config: { terminals: T[] }, selector: Selector) {
   const matches = config?.terminals?.filter(row =>
     (selector.localTerminalId === undefined || row.id === selector.localTerminalId)
     && (selector.terminalId === undefined || (row.config.erpTerminalId || row.id) === selector.terminalId)

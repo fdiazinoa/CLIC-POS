@@ -1,4 +1,4 @@
-import { markSettingsReturnQa, measureSettingsReturnQa } from '../settingsReturnQaTrace';
+import { markSettingsReturnQa, markSettingsReturnV3Failure, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import {canViewTicketHistory} from '../utils/ticketHistoryPermission';
 import {LegacyFiscalCheckoutAttempt} from '../services/fiscal/LegacyFiscalCheckoutAttempt';
 import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
@@ -153,6 +153,7 @@ import MobileCartButton from './MobileCartButton';
 import {
    beginPosInteraction,
    beginDestinationInteraction,
+   commitInteractionDestination,
    expectInteractionDestination,
    finishInteraction,
    observeDestinationAttempt,
@@ -272,7 +273,7 @@ export interface V3OperationalPOSBoundary {
    categories?: readonly V3OperationalCategory[];
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
-   validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference, trace?: PosInteractionTrace): Promise<void>;
    completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
    restoreReservation?(id: string): Promise<V3RecoveredReservation>;
@@ -3770,6 +3771,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [dispatchLocalAuthority,dispatchProjection?.mode,activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features?.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
+   const pendingAddCommit = useRef<{ trace: PosInteractionTrace; line: CartItem } | null>(null);
+   useLayoutEffect(() => {
+      const pending = pendingAddCommit.current;
+      if (!pending || !cart.some(item => item.cartId === pending.line.cartId && item.quantity === pending.line.quantity)) return;
+      pendingAddCommit.current = null;
+      markInteractionStage(pending.trace, 'ADD_CART_COMMIT');
+      commitInteractionDestination(pending.trace, 'POS_ADD_ITEM', undefined, uiLifetime.current.capture());
+   }, [cart]);
+   useLayoutEffect(() => () => {
+      finishInteraction(pendingAddCommit.current?.trace, 'cancelled');
+      pendingAddCommit.current = null;
+   }, []);
    const latestAddCart = useRef(cart);
    latestAddCart.current = cart;
    const addQueue = useRef(new V3OperationalUIQueue());
@@ -3788,21 +3801,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       catch { setErrorToast('Selecciona el ticket original para devolver esta presentación.'); return true; }
    }, [isReturnMode]);
 
-   const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
-      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) return false;
+   const performAddToCart = useCallback(async (trace: PosInteractionTrace, args: [
+      product: Product, quantity?: number, priceOverride?: number, modifiers?: string[], trackingData?: any[],
+      selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'],
+      consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>
+   ]) => {
+      const [sourceProduct, quantity = 1, priceOverride, sourceModifiers, trackingData, selectedVariant, variantInfo, note, restaurantConfig, consignmentPatch] = args;
+      let product = sourceProduct;
+      let modifiers = sourceModifiers;
+      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) {
+         finishInteraction(trace, 'cancelled');
+         return false;
+      }
       if(product.inventoryPresentationMaster){const {inventoryPresentationMaster:_overlay,...source}=product;product=source;}
       const mounted = uiLifetime.current.capture();
       const isCurrent = () => mounted() && addContext.current === v3Operational;
-      const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
-      activeAddTraceRef.current = trace;
-      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+      let failed = false;
+      const markCartUpdate = (line: CartItem) => {
+         finishInteraction(pendingAddCommit.current?.trace, 'cancelled');
+         pendingAddCommit.current = { trace, line };
+         expectInteractionDestination(trace, 'POS_ADD_ITEM');
+         markInteractionStateUpdate(trace, (cart || []).length + 2);
+      };
       try {
       if (v3Operational) {
          if (consignmentPatch || modifiers?.length && !restaurantConfig && !selectedVariant) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
          if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData) {
-            try { await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); } catch (error: any) {
+            try { await measureInteractionStage(trace, 'ADD_VALIDATE_START', 'ADD_VALIDATE_END', () => v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }, trace)); } catch (error: any) {
             if (String(error?.message || '').includes('SYNC_V3_WAREHOUSE_UNAVAILABLE')) { openWarehousePrompt(product); return false; }
             throw error;
          }
@@ -3812,7 +3839,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       const authorize = () => authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado');
-      if (!(v3Operational ? await authorizeV3UIContext(isCurrent, authorize) : await authorize())) return;
+      const authorized = await measureInteractionStage(trace, 'ADD_AUTHORIZATION_START', 'ADD_AUTHORIZATION_END',
+         () => v3Operational ? authorizeV3UIContext(isCurrent, authorize) : authorize());
+      if (!authorized) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, (product as CartItem).inventoryPresentation?presentationBaseQuantity(quantity,(product as CartItem).inventoryPresentation!.format.factor):quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
@@ -3870,7 +3899,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
-         markInteractionStateUpdate(trace, (cart || []).length + 2);
+
          const updatedItem = {
                ...existing,
                quantity: existing.quantity + quantity,
@@ -3880,6 +3909,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
                ...consignmentPatch,
             };
+         markCartUpdate(updatedItem);
          if (v3Operational) latestAddCart.current = [updatedItem, ...latestAddCart.current.filter(i => i.cartId !== existing.cartId)];
          onUpdateCart(prev => {
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
@@ -3912,7 +3942,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             trackingData:v3Operational&&trackingData?trackingSelectionsForCart(trackingData,product,newCartId):trackingData,
             ...consignmentPatch,
          };
-         markInteractionStateUpdate(trace, (cart || []).length + 2);
+         markCartUpdate(newItem);
          if (v3Operational) latestAddCart.current = [newItem, ...latestAddCart.current];
          onUpdateCart(prev => [newItem, ...prev]);
       }
@@ -3922,21 +3952,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       markInteractionStage(trace, 'HANDLER_END');
       return true;
       } catch (error: any) {
+         failed = true;
          if (!v3Operational) throw error;
+         markSettingsReturnV3Failure('add', error);
          setErrorToast(describeV3Error(error));
          return false;
       } finally {
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
-         if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
+         if (failed) finishInteraction(trace, 'failed');
+         else if (!trace.renderTarget) finishInteraction(trace, 'cancelled');
       }
    }, [dispatchProjection?.mode, activeTable?.currentOrderId, activeTable?.id, activeDirectV3TicketId, activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
-   const addToCart = useCallback((...args: Parameters<typeof performAddToCart>) => {
+   const addToCart = useCallback((...args: Parameters<typeof performAddToCart>[1]) => {
       if (rejectFormatQuickReturn(args[0],isReturnMode || Number(args[1] ?? 1) < 0)) return Promise.resolve(false);
-      if (!v3Operational) return performAddToCart(...args);
+      const cardTrace = activeAddTraceRef.current;
+      const trace = cardTrace?.operation === 'ADD_TICKET_ITEM'
+         ? cardTrace : beginPosInteraction('ADD_TICKET_ITEM', { source: cardTrace?.operation === 'BARCODE_SCAN' ? 'barcode' : 'programmatic' });
+      trace.destinationMode = true;
+      if (cardTrace === trace) activeAddTraceRef.current = null;
+      markInteractionStage(trace, 'ADD_QUEUE_START');
+      const add = () => {
+         markInteractionStage(trace, 'ADD_QUEUE_END');
+         return performAddToCart(trace, args);
+      };
+      if (!v3Operational) return add();
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
-      return addQueue.current.run(() => mounted() && addContext.current === context, () => performAddToCart(...args))
-         .catch((error: any) => { setErrorToast(describeV3Error(error)); return false; });
+      return addQueue.current.run(() => mounted() && addContext.current === context, add)
+         .catch((error: any) => {
+            markInteractionStage(trace, 'ADD_QUEUE_END');
+            markSettingsReturnV3Failure('add-ui-queue', error);
+            finishInteraction(trace, 'failed');
+            setErrorToast(describeV3Error(error));
+            return false;
+         });
    }, [performAddToCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
 
    const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = [],trackingData?:Parameters<typeof trackingSelectionsForCart>[0]) => {
@@ -4255,8 +4304,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleProductCardClick = useCallback((product: Product) => {
       if (Date.now() - quickActionOpenedAtRef.current < 900) return;
       if (quickActionDataRef.current) return;
-      activeAddTraceRef.current = beginPosInteraction('ADD_TICKET_ITEM', { source: 'product_card', productId: product.id });
-      handleProductClickRef.current(product);
+      const trace = beginPosInteraction('ADD_TICKET_ITEM', { source: 'product_card' });
+      activeAddTraceRef.current = trace;
+      try { handleProductClickRef.current(product); }
+      finally {
+         if (activeAddTraceRef.current === trace) {
+            finishInteraction(trace, 'cancelled');
+            activeAddTraceRef.current = null;
+         }
+      }
    }, []);
 
    const handleProductCardContextMenu = useCallback((product: Product, event: React.MouseEvent<HTMLDivElement>) => {
