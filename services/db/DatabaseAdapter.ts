@@ -110,6 +110,8 @@ export interface FinancialNumberResult {
     series?: { id: string; [key: string]: any };
 }
 
+export type V3AuthorityReadStage = 'QUEUE_START' | 'QUEUE_END' | 'CONFIG_START' | 'CONFIG_END' | 'SNAPSHOT_START' | 'SNAPSHOT_END';
+
 export interface DatabaseAdapter {
     readonly fiscalCreditApplicationStore?: import('./NativeFiscalCreditApplicationStore').NativeFiscalCreditApplicationStore;
     readonly fiscalReturnStore?: import('./NativeFiscalReturnStore').NativeFiscalReturnStore;
@@ -151,6 +153,11 @@ export interface DatabaseAdapter {
     bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void>; // NEW: Efficient bulk upsert
     bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void>; // NEW: Bulk specific handling
     getDocument<T>(collectionName: string, id: string): Promise<T | null>;
+    readV3OperationalAuthority?(
+        runtime: import('../sync/LargeMasterSyncV3Types').LargeMasterSyncV3RuntimeVersion,
+        assertConfig: (config: import('../sync/LargeMasterSyncV3OperationalConfigScope').V3OperationalAuthorityConfig) => void,
+        observe: (stage: V3AuthorityReadStage) => void,
+    ): ReturnType<NonNullable<import('../sync/LargeMasterSyncV3Types').LargeMasterSyncV3Store['readOperationalSnapshot']>>;
     readV3OperationalAuthorityConfig?(): Promise<import('../sync/LargeMasterSyncV3OperationalConfigScope').V3OperationalAuthorityConfig | null>;
     readOfflineFiscalAuthorityConfig?(): Promise<Pick<import('../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null>;
     getDocumentsByIds?<T>(collectionName: string, ids: readonly string[]): Promise<T[]>;

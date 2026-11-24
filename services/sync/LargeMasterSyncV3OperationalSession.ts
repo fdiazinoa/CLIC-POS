@@ -1,5 +1,5 @@
-import { measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
-import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
+import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
+import { v3OperationalConfigContext, type V3OperationalAuthorityConfig } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
 import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
 import {resolveSyncTarget} from './SyncProfile';
@@ -250,19 +250,11 @@ export class LargeMasterSyncV3OperationalSession {
       if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=local;
     }
-    if (this.expectedConfigScope !== undefined) {
-      const checkConfig = async () => {
-        const projected = add ? await dbAdapter.readV3OperationalAuthorityConfig?.() : undefined;
-        const config = projected ?? await db.get('config') as unknown as BusinessConfig;
-        if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
-          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
-        }
-      };
-      if (add) {
-        const stage = add.recheck ? 'ADD_RECHECK_CONFIG' : 'ADD_AUTHORITY_CONFIG';
-        await measureInteractionStage(add.trace, `${stage}_START`, `${stage}_END`, checkConfig);
-      } else await checkConfig();
-    }
+    const assertConfig = (config: V3OperationalAuthorityConfig) => {
+      if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
+      }
+    };
     const readSnapshot = async () => this.store.readOperationalSnapshot
       ? this.store.readOperationalSnapshot(this.ready.runtime.version)
       : {
@@ -270,10 +262,26 @@ export class LargeMasterSyncV3OperationalSession {
         inventory: await this.ready.runtime.getInventorySnapshotVersion(),
         owner: await this.store.getOperationalOwner!(),
       };
-    const snapshotStage = add?.recheck ? 'ADD_RECHECK_SNAPSHOT' : 'ADD_AUTHORITY_SNAPSHOT';
-    const { active, inventory, owner } = add
-      ? await measureInteractionStage(add.trace, `${snapshotStage}_START`, `${snapshotStage}_END`, readSnapshot)
-      : await readSnapshot();
+    const readAuthority = async () => {
+      const scopeRequired = this.expectedConfigScope !== undefined;
+      const stage = add?.recheck ? 'ADD_RECHECK' : 'ADD_AUTHORITY';
+      if (scopeRequired && add && dbAdapter.readV3OperationalAuthority) {
+        return dbAdapter.readV3OperationalAuthority(this.ready.runtime.version, assertConfig,
+          point => markInteractionStage(add.trace, `${stage}_${point}`));
+      }
+
+      if (scopeRequired) {
+        const checkConfig = async () => {
+          const projected = add ? await dbAdapter.readV3OperationalAuthorityConfig?.() : undefined;
+          assertConfig(projected ?? await db.get('config') as unknown as BusinessConfig);
+        };
+        if (add) await measureInteractionStage(add.trace, `${stage}_CONFIG_START`, `${stage}_CONFIG_END`, checkConfig);
+        else await checkConfig();
+      }
+      return add ? measureInteractionStage(add.trace, `${stage}_SNAPSHOT_START`, `${stage}_SNAPSHOT_END`, readSnapshot)
+        : readSnapshot();
+    };
+    const { active, inventory, owner } = await readAuthority();
     if (active?.syncId !== this.ready.runtime.version.syncId
       || active.syncVersion !== this.ready.runtime.version.syncVersion
       || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor

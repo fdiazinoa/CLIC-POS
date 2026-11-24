@@ -177,19 +177,53 @@ test('adding a line still checks fresh config and inventory snapshots with the p
   try {
     const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
     const trace = { stages: {} };
-    let projected = 0;
-    const project = f.adapter.readV3OperationalAuthorityConfig.bind(f.adapter);
-    f.adapter.readV3OperationalAuthorityConfig = async () => { projected++; return project(); };
+    let grouped = 0;
+    const readAuthority = f.adapter.readV3OperationalAuthority.bind(f.adapter);
+    f.adapter.readV3OperationalAuthority = (...args) => { grouped++; return readAuthority(...args); };
     await session.assertCurrent({ trace });
     f.db.prepare("UPDATE master_v3_inventory_state SET cursor='changed'").run();
     await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_RUNTIME_VERSION_CHANGED/);
-    assert.equal(projected, 2);
+    assert.equal(grouped, 2);
 
     const config = structuredClone(f.env.config);
     config.terminals[0].config.pricing.allowedTariffIds = [id(999)];
     await f.adapter.saveCollection('config', config);
     await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_BINDING_CHANGED/);
-    assert.equal(projected, 3);
+    assert.equal(grouped, 3);
     assert.deepEqual(f.documents('transactions'), []);
   } finally { f.close(); }
+});
+
+
+test('authority reads share one queue turn and wait for earlier config writes', async () => {
+  const f = await nativeFixture();
+  try {
+    const original = f.documents('config')[0];
+    const changed = structuredClone(original);
+    changed.terminals[0].config.pricing = { defaultTariffId: 'updated', allowedTariffIds: ['updated'] };
+    const selector = { localTerminalId: changed.terminals[0].id };
+    const expected = v3OperationalConfigContext(changed, selector).scope;
+    const runtime = { syncId: id(60), syncVersion: 32, contractVersion: 2 as const };
+    const events: string[] = [];
+    const earlierWrite = f.adapter.saveCollection('config', changed);
+    let otherRead: Promise<unknown> | undefined;
+    await f.adapter.readV3OperationalAuthority(runtime, config => {
+      assert.equal(v3OperationalConfigContext(config, selector).scope, expected);
+      events.push('CONFIG_CHECK');
+    }, stage => {
+      events.push(stage);
+      if (stage === 'CONFIG_END') otherRead = f.adapter.getCollection('config').then(() => events.push('OTHER_READ'));
+    });
+    await earlierWrite;
+    await otherRead;
+    assert.deepEqual(events, [
+      'QUEUE_START', 'QUEUE_END', 'CONFIG_START', 'CONFIG_CHECK', 'CONFIG_END',
+      'SNAPSHOT_START', 'SNAPSHOT_END', 'OTHER_READ',
+    ]);
+
+    const rejected: string[] = [];
+    await assert.rejects(f.adapter.readV3OperationalAuthority(runtime, () => { throw Error('scope changed'); },
+      stage => rejected.push(stage)), /scope changed/);
+    assert.deepEqual(rejected, ['QUEUE_START', 'QUEUE_END', 'CONFIG_START', 'CONFIG_END']);
+  } finally { f.db.close(); }
 });
