@@ -1,3 +1,4 @@
+import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
 import { weightUnit } from '../../utils/scaleWeight';
 import { v3ArticleImages } from '../../utils/v3ArticlePresentation';
 import { v3RestaurantContract } from '../../utils/v3RestaurantContract';
@@ -114,7 +115,10 @@ export class LargeMasterSyncV3OperationalCatalog {
   }
 
   private async assertInventoryVersion(): Promise<void> {
-    const inventory = await this.ready.runtime.getInventorySnapshotVersion();
+    this.checkInventoryVersion(await this.ready.runtime.getInventorySnapshotVersion());
+  }
+
+  private checkInventoryVersion(inventory: { version: number; cursor: string } | null): void {
     if (!inventory || inventory.version !== this.ready.inventoryVersion
       || inventory.cursor !== this.ready.inventoryCursor) {
       throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
@@ -124,7 +128,7 @@ export class LargeMasterSyncV3OperationalCatalog {
   private async adapt(sale: V3SaleArticle, support?: {
     balance: { qtyOnHand: number; qtyReserved: number; qtyCommitted: number } | null;
     variants: RecordObject[];
-  }): Promise<V3OperationalProduct> {
+  }, trace?: PosInteractionTrace): Promise<V3OperationalProduct> {
     const article = sale.article;
     const sourceFlags = operationalFlags(article.operationalFlags);
     const rawFlags = article.operationalFlags as RecordObject | undefined;
@@ -151,10 +155,13 @@ export class LargeMasterSyncV3OperationalCatalog {
       || sale.version.syncVersion !== this.ready.runtime.version.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVALID');
     }
-    const [balance, sourceVariants] = support ? [support.balance, support.variants] : await Promise.all([
+    const readSupport = () => Promise.all([
       this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
       this.ready.runtime.getOperationalVariants(articleId),
     ]);
+    const [balance, sourceVariants] = support ? [support.balance, support.variants]
+      : trace ? await measureInteractionStage(trace, 'ADD_CATALOG_SUPPORT_START', 'ADD_CATALOG_SUPPORT_END', readSupport)
+      : await readSupport();
     // Missing balances are zero availability, not a catalog visibility rule.
     // Sale validation enforces the authoritative negative-stock settings.
     if (sourceFlags.isWeighted && sourceVariants.length > 0) {
@@ -273,11 +280,22 @@ export class LargeMasterSyncV3OperationalCatalog {
       diagnostics, nextCursor: result.nextCursor };
   }
 
-  async get(articleId: string): Promise<V3OperationalProduct | null> {
-    await this.assertInventoryVersion();
-    const sale = await this.saleCatalog.get(articleId);
-    const item = sale ? await this.adapt(sale) : null;
-    await this.assertInventoryVersion();
+  async get(articleId: string, trace?: PosInteractionTrace, combinePrimaryReads = false): Promise<V3OperationalProduct | null> {
+    const read = <T>(stage: 'ADD_CATALOG_SNAPSHOT_BEFORE' | 'ADD_CATALOG_SALE' | 'ADD_CATALOG_SNAPSHOT_AFTER', work: () => Promise<T>) =>
+      trace ? measureInteractionStage(trace, `${stage}_START`, `${stage}_END`, work) : work();
+    const combined = combinePrimaryReads && this.ready.runtime.readOperationalCatalogSale(articleId.trim(), this.saleCatalog.tariffId,
+      trace ? stage => markInteractionStage(trace, `ADD_CATALOG_PRIMARY_${stage}`) : undefined);
+    let sale: V3SaleArticle | null;
+    if (combined) {
+      const { inventory, article, price } = await combined;
+      this.checkInventoryVersion(inventory);
+      sale = article ? this.saleCatalog.resolveArticle(article, price) : null;
+    } else {
+      await read('ADD_CATALOG_SNAPSHOT_BEFORE', () => this.assertInventoryVersion());
+      sale = await read('ADD_CATALOG_SALE', () => this.saleCatalog.get(articleId));
+    }
+    const item = sale ? await this.adapt(sale, undefined, trace) : null;
+    await read('ADD_CATALOG_SNAPSHOT_AFTER', () => this.assertInventoryVersion());
     return item;
   }
 

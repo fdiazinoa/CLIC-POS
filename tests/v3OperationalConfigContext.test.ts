@@ -143,3 +143,160 @@ for (const drift of [false, true]) test(`cached UI acquisition waits for an acti
     assert.deepEqual(f.documents('inventoryLedger'), []);
   } finally { release(); f.close(); }
 });
+
+test('SQLite authority projection matches the full decoder and declines ambiguous storage', async () => {
+  const f = await nativeFixture();
+  try {
+    const config = f.documents('config')[0];
+    config.terminals[0].config.fiscal = { environment: 0, enabled: false, customPolicy: { order: [true, false, null] } };
+    config.terminals[0].config.erpSnapshot = { masters: { items: [{ id: 'irrelevant' }] } };
+    config.terminalSnapshots = { irrelevant: 'x'.repeat(20_000) };
+    await f.adapter.saveCollection('config', config);
+    const selector = { localTerminalId: config.terminals[0].id };
+    const full = await f.adapter.getCollection('config');
+    const projected = await f.adapter.readV3OperationalAuthorityConfig();
+    assert.ok(projected);
+    assert.equal(v3OperationalConfigContext(projected, selector).key, v3OperationalConfigContext(full, selector).key);
+    assert.ok(JSON.stringify(projected).length < JSON.stringify(full).length);
+    assert.deepEqual(projected.terminals[0].config.fiscal, full.terminals[0].config.fiscal);
+
+    config.terminals[0].config.fiscal.enabled = true;
+    await f.adapter.saveCollection('config', config);
+    const changed = await f.adapter.readV3OperationalAuthorityConfig();
+    assert.ok(changed);
+    assert.notEqual(v3OperationalConfigContext(changed, selector).scope, v3OperationalConfigContext(projected, selector).scope);
+
+    f.db.prepare("INSERT INTO documents(collection_name,doc_id,data,sort_order,updatedAt) VALUES('config','metadata',?,1,'test')").run('{"id":"config_metadata"}');
+    assert.equal(await f.adapter.readV3OperationalAuthorityConfig(), null);
+    assert.equal(v3OperationalConfigContext(await f.adapter.getCollection('config'), selector).key, v3OperationalConfigContext(changed, selector).key);
+  } finally { f.db.close(); }
+});
+
+test('V3 session acquisition and publication read only authority fields on canonical storage', async () => {
+  const f = await fixture();
+  try {
+    let fullReads = 0, projections = 0;
+    const getCollection = f.adapter.getCollection.bind(f.adapter);
+    const readProjection = f.adapter.readV3OperationalAuthorityConfig.bind(f.adapter);
+    f.adapter.getCollection = (...args) => {
+      if (args[0] === 'config') fullReads++;
+      return getCollection(...args);
+    };
+    f.adapter.readV3OperationalAuthorityConfig = () => { projections++; return readProjection(); };
+
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    assert.ok(projections >= 4, 'the open and publication fences each read current authority');
+    assert.equal(fullReads, 0);
+
+    f.db.prepare("INSERT INTO documents(collection_name,doc_id,data,sort_order,updatedAt) VALUES('config','metadata',?,1,'test')")
+      .run('{"id":"config_metadata"}');
+    await session.assertCurrent();
+    assert.equal(fullReads, 1, 'an ambiguous layout still uses the full decoder');
+
+    const changed = structuredClone(f.env.config);
+    changed.terminals[0].config.pricing.allowedTariffIds = [id(999)];
+    f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(changed));
+    await assert.rejects(session.assertCurrent(), /SYNC_V3_BINDING_CHANGED/);
+    assert.equal(fullReads, 2);
+  } finally { f.close(); }
+});
+
+test('adding a line still checks fresh config and inventory snapshots with the projection', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    const trace = { stages: {} };
+    let grouped = 0;
+    const readAuthority = f.adapter.readV3OperationalAuthority.bind(f.adapter);
+    f.adapter.readV3OperationalAuthority = (...args) => { grouped++; return readAuthority(...args); };
+    await session.assertCurrent({ trace });
+    f.db.prepare("UPDATE master_v3_inventory_state SET cursor='changed'").run();
+    await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+    assert.equal(grouped, 2);
+
+    const config = structuredClone(f.env.config);
+    config.terminals[0].config.pricing.allowedTariffIds = [id(999)];
+    await f.adapter.saveCollection('config', config);
+    await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_BINDING_CHANGED/);
+    assert.equal(grouped, 3);
+    assert.deepEqual(f.documents('transactions'), []);
+  } finally { f.close(); }
+});
+
+
+test('authority reads share one queue turn and wait for earlier config writes', async () => {
+  const f = await nativeFixture();
+  try {
+    const original = f.documents('config')[0];
+    const changed = structuredClone(original);
+    changed.terminals[0].config.pricing = { defaultTariffId: 'updated', allowedTariffIds: ['updated'] };
+    const selector = { localTerminalId: changed.terminals[0].id };
+    const expected = v3OperationalConfigContext(changed, selector).scope;
+    const runtime = { syncId: id(60), syncVersion: 32, contractVersion: 2 as const };
+    const events: string[] = [];
+    const earlierWrite = f.adapter.saveCollection('config', changed);
+    let otherRead: Promise<unknown> | undefined;
+    await f.adapter.readV3OperationalAuthority(runtime, config => {
+      assert.equal(v3OperationalConfigContext(config, selector).scope, expected);
+      events.push('CONFIG_CHECK');
+    }, stage => {
+      events.push(stage);
+      if (stage === 'CONFIG_END') otherRead = f.adapter.getCollection('config').then(() => events.push('OTHER_READ'));
+    });
+    await earlierWrite;
+    await otherRead;
+    assert.deepEqual(events, [
+      'QUEUE_START', 'QUEUE_END', 'CONFIG_START', 'CONFIG_CHECK', 'CONFIG_END',
+      'SNAPSHOT_START', 'SNAPSHOT_END', 'OTHER_READ',
+    ]);
+
+    const rejected: string[] = [];
+    await assert.rejects(f.adapter.readV3OperationalAuthority(runtime, () => { throw Error('scope changed'); },
+      stage => rejected.push(stage)), /scope changed/);
+    assert.deepEqual(rejected, ['QUEUE_START', 'QUEUE_END', 'CONFIG_START', 'CONFIG_END']);
+  } finally { f.db.close(); }
+});
+
+test('ordinary traced add reuses the native inventory anchor but rejects a changed source on final recheck', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    const authority = {
+      binding: session.binding, syncId: id(60), syncVersion: 32, warehouseId: id(5), tariffId: id(6),
+      taxIncluded: false, inventoryVersion: 4, inventoryCursor: 'inventory-cursor',
+    };
+    const product = { id: id(7), name: 'Servicio QA', type: 'SERVICE', isInventoriable: false, taxable: false,
+      appliedTaxIds: [], price: 100, activeInWarehouses: [id(5)] };
+    session.catalogAfterAssert = async () => ({ get: async () => ({ product, authority }) });
+    const line = { ...product, v3SaleAuthority: authority, cartId: 'qa-line', quantity: 1 };
+    const store = f.adapter.masterSyncV3Store;
+    let separateReads = 0;
+    const initialInventory = await store.getInventoryAuthority();
+    store.getInventoryAuthority = async () => { separateReads++; return initialInventory; };
+    const readAuthority = f.adapter.readV3OperationalAuthority.bind(f.adapter);
+    let checks = 0;
+    let drift = false;
+    f.adapter.readV3OperationalAuthority = async (...args) => {
+      const snapshot = await readAuthority(...args);
+      if (++checks === 2 && drift && snapshot.inventoryAuthority) {
+        return { ...snapshot, inventoryAuthority: { ...snapshot.inventoryAuthority, syncId: id(999) } };
+      }
+      return snapshot;
+    };
+
+    const trace = { stages: {} };
+    await session.validate(f.env.config, [line], id(6), id(5), 'SALE', undefined, undefined, false, undefined, trace);
+    assert.equal(separateReads, 0);
+    assert.equal(checks, 2);
+
+    checks = 0;
+    drift = true;
+    await assert.rejects(session.validate(f.env.config, [line], id(6), id(5), 'SALE', undefined, undefined, false, undefined, trace),
+      /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+    assert.equal(separateReads, 0);
+    assert.equal(checks, 2);
+
+    await session.validate(f.env.config, [line], id(6), id(5));
+    assert.equal(separateReads, 1);
+  } finally { f.close(); }
+});
