@@ -110,6 +110,7 @@ import {
     shouldRunLegacyAutomaticMasterSweep,
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
+import { markSettingsReturnQa, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 import { preserveLocalCatalog } from './preserveLocalCatalog';
 import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLocalCatalog';
@@ -3928,7 +3929,7 @@ class SyncManager {
                             JSON.stringify(this.sanitizeConfig(incomingConfig));
 
                         if (options?.persist !== false && changed) {
-                            await db.save('config', incomingConfig);
+                            await measureSettingsReturnQa('sync.config.terminalFallback.replace', () => db.save('config', incomingConfig));
                         }
 
                         if (options?.dispatchEvent !== false && changed) {
@@ -4083,7 +4084,7 @@ class SyncManager {
 
         if (options?.persist !== false && changed) {
             if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
-            await db.save('config', nextConfig);
+            await measureSettingsReturnQa('sync.config.terminalResolved.replace', () => db.save('config', nextConfig));
         }
 
         if (nextRuntimeWarehouses.length > 0) {
@@ -5617,18 +5618,33 @@ class SyncManager {
             const mergedPosCategories = posCategories.length > 0
                 ? mergePosCategoryPresentation(currentConfig.posCategories, posCategories)
                 : currentConfig.posCategories;
-            const nextConfig = {
-                ...currentConfig,
-                departments: departments.length > 0 ? departments : currentConfig.departments,
-                sections: sections.length > 0 ? sections : currentConfig.sections,
-                families: families.length > 0 ? families : currentConfig.families,
-                subfamilies: subfamilies.length > 0 ? subfamilies : currentConfig.subfamilies,
-                brands: brands.length > 0 ? brands : currentConfig.brands,
-                posCategories: mergedPosCategories,
+            const incomingClassifications = {
+                departments,
+                sections,
+                families,
+                subfamilies,
+                brands,
+                posCategories: posCategories.length > 0 ? mergedPosCategories : [],
             };
-            await db.save('config', nextConfig);
-            nextConfigWithClassifications = nextConfig;
-            changed = true;
+            const content = (row: Record<string, unknown>) => JSON.stringify(Object.fromEntries(
+                Object.keys(row).filter(key => key !== 'updatedAt').sort().map(key => [key, row[key]]),
+            ));
+            const updates = Object.fromEntries(Object.entries(incomingClassifications).filter(([key, rows]) => {
+                if (!rows.length) return false;
+                const current = currentConfig[key];
+                return !Array.isArray(current) || current.length !== rows.length || rows.some((row, index) => {
+                    const previous = current[index];
+                    return !previous || typeof previous !== 'object' || content(row) !== content(previous);
+                });
+            }));
+            if (Object.keys(updates).length > 0) {
+                const nextConfig = { ...currentConfig, ...updates };
+                await measureSettingsReturnQa('sync.config.classifications.replace', () => db.save('config', nextConfig));
+                nextConfigWithClassifications = nextConfig;
+                changed = true;
+            } else {
+                markSettingsReturnQa('sync.config.classifications.unchanged');
+            }
         }
 
         if (changed) {

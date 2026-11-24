@@ -146,6 +146,7 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
   const deps = {
     receivePosSecurityV2: async () => undefined,
     freezeCount() {}, freezePhase() {}, protectsLocalCatalogFromCloud: () => false,
+    measureSettingsReturnQa: (_: string, work: () => Promise<unknown>) => work(),
     usesLargeMasterSyncV3Authority: () => kind === 'ERP_ACTIVE',
     syncPolicy: { resolve: () => target },
     readOperationalTerminalBinding: () => JSON.stringify([target, credentials, companyId]),
