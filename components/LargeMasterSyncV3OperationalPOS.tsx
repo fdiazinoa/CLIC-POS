@@ -163,8 +163,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
       const ready = await measureSettingsReturnQa('v3.acquireContext', () => acquireLargeMasterSyncV3ConfigContext(attempt.config, latestProps.current.activeTerminalId || ''));
       if (!currentAttempt()) return;
-      const [config, source] = await Promise.all([ready.projectConfig(attempt.config), ready.catalog(tariffId, warehouseId)]);
-      const categoryMetadata = await source.categories();
+      const [config, { source, categoryMetadata }] = await Promise.all([
+        ready.projectConfig(attempt.config),
+        ready.catalog(tariffId, warehouseId).then(async source => ({ source, categoryMetadata: await source.categories() })),
+      ]);
       if (!currentAttempt()) return;
       if (!config.tariffs.some(row => row.id === tariffId)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
       attempt.phase = 'ready';

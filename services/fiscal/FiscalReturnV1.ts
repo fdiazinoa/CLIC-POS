@@ -262,6 +262,8 @@ export function returnOperatorMessage(error: unknown): string {
     const code = (error as Error)?.message || '';
     if (/FISCAL_RETURN_.*(?:SETTLEMENT|CUSTOMER|ADVANCE|WALLET|DEBT|CREDIT|PAYMENT_ATTRIBUTION|PAYMENT_EXCEEDED)/.test(code))
         return `El ERP retuvo esta liquidación. Revisa el cliente, la deuda y la configuración de saldo; se conserva la misma operación. (${code})`;
+    if ((error as Error)?.name === 'AbortError' || code === 'FISCAL_RETURN_REQUEST_TIMEOUT')
+        return 'El ERP no respondió a tiempo. La devolución conserva su operación para continuar desde el mismo intento.';
     if (code === 'FISCAL_RETURN_RECOVERY_REQUIRED')
         return 'Hay una reserva fiscal pendiente que requiere revisión antes de continuar. Se conserva la devolución.';
     if (code === 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE')
