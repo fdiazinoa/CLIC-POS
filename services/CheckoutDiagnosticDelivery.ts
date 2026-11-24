@@ -30,7 +30,7 @@ export function diagnosticEvent(record: CheckoutDiagnosticRecord, sequence: numb
     const event = {
         record_id: record.id, local_sequence: sequence, occurred_at: record.at,
         message,
-        stage: stages[record.stage] || 'CART_CHANGED', severity: record.anomaly ? 'WARN' : 'INFO',
+        stage: stages[record.stage] || (record.stage.startsWith('CHECKOUT_COMMIT_') ? 'CHECKOUT_OPENED' : 'CART_CHANGED'), severity: record.anomaly ? 'WARN' : 'INFO',
         anomaly_code: record.anomaly ? 'POS_ITEMS_MISSING' : null,
         ticket_id: scalar(d.displayId), transaction_id: scalar(d.transactionId), event_id: scalar(d.eventId),
         table_id: scalar(d.tableId), order_id: scalar(d.orderId),

@@ -11811,6 +11811,7 @@ const AppContent: React.FC = () => {
   }), [isDataLoaded, fiscalHistoryHydrated, isSecurityLoaded, deviceId, fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction, onCommitted?: (transaction: Transaction) => void) => {
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_START');
     if(txn.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&dbAdapter.readDispatchCommittedReceipt){const original=await dbAdapter.readDispatchCommittedReceipt(txn.id);if(original){if(financialIdentity(original)!==financialIdentity(txn))throw Error('DISPATCH_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);onCommitted?.(original);return;}}
     if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     if(txn.inventoryEffectsContract!=='WAREHOUSE_RESERVATION_V1')assertFormatsPostingClosed(txn.items || []);
@@ -11832,6 +11833,7 @@ const AppContent: React.FC = () => {
       }
     }
     await db.assertFiscalTransactionAuthority({ ...txn, terminalId: fiscalTerminal?.id || txn.terminalId }, fiscalTerminal?.config);
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_AUTHORITY_DONE');
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const terminal = (config.terminals || []).find(row => row.config?.currentDeviceId === deviceId);
       const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
@@ -11847,6 +11849,7 @@ const AppContent: React.FC = () => {
         if (!completed) throw error;
         result = {transaction:completed,created:false};
       }
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_V3_SAVED');
       onCommitted?.(result.transaction);
       if(result.created&&txn.legacySaleNumbering===1)transactionService.broadcastCommittedNumbers(result.transaction);
       if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId||txn.legacySaleNumbering===1) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
@@ -11855,6 +11858,7 @@ const AppContent: React.FC = () => {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;
         if (updated) setCustomers(previous => previous.map(row => row.id === updated.id ? updated : row));
       }
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_POST_SAVE_HANDOFF');
       syncFiscalDocument(result.transaction).catch(console.error);
       backgroundSyncManager.triggerSync().catch(console.error);
       return;
