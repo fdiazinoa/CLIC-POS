@@ -1,3 +1,4 @@
+import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import {assertAtomicLegacySaleNumbering,hasAtomicLegacySaleNumbering,withoutAtomicSaleNumbers} from '../fiscal/AtomicLegacySaleNumbering';
 import {returnContract,returnNeed,type ReturnAttempt} from '../fiscal/FiscalReturnV1';
 import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
@@ -156,8 +157,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   }
   try{for(const {transaction,options} of entries){assertAtomicLegacySaleNumbering(transaction);if(hasAtomicLegacySaleNumbering(transaction)&&(entries.length!==1||options?.refund))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');}}catch(error){return Promise.reject(error);}
+  recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CANONICALIZE_START');
   const identities = entries.map(({transaction,options={}})=>allocationDraftIdentity(transaction,warehouseId,options));
   const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities,entries.map(({transaction})=>transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction)?[transaction.globalSequence,transaction.displayId,transaction.seriesNumber]:null)]);
+  recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CANONICALIZE_DONE');
   const pending = entries.map(entry => commits.get(entry.transaction.id)).find(Boolean);
   if (pending) return pending.identity === identity ? pending.promise
     : Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
@@ -179,6 +182,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }
     const saleConfig = entries.some(entry => !entry.options?.refund) ? await session.projectConfig(config) : undefined;
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CONTEXT_READY');
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
@@ -264,6 +268,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({collectionName:'internalSequences',document:issuance.series!,expectedDocument:JSON.stringify(series)},
         {collectionName:'globalSequenceCounter',document:issuance.counter!,...(counter ? {expectedDocument:JSON.stringify(counter)} : {requireAbsent:true})});
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_NUMBERING_DONE');
     if(!dispatch){validateV3FrozenFiscalAmounts(transaction, retained);validateV3FrozenLineFiscalAmounts(transaction, projected);}
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
     const ledger = dispatch ? [] : await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
@@ -341,6 +346,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_DOCUMENTS_READY');
     if (returnAttempt||dispatch||isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
       if (options.refund) {
         const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
@@ -382,6 +388,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       const claim = retained?.reservation ? JSON.parse(retained.expected) : undefined;
       // ADVANCE records a prior application in SALE_POSTED; PAYMENT_POSTED represents only newly received settlement.
       const newPayments = claim ? document.payments.filter(payment=>payment.method !== 'ADVANCE') : document.payments;
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_PAYLOAD_START');
       const paymentPosted = buildPaymentPostedPayload(claim ? {...document,payments:newPayments,
         settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { ...fiscalSourceMetadata, paymentIntentIds });
       events.push({ eventId: claim?.saleEventId || createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
@@ -392,6 +399,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       intentIds.push(...paymentIntentIds);
       }
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_PAYLOAD_DONE');
     results.push({ transaction: document, created: true });
     }
     for (const mutation of documents) {

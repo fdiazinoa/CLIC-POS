@@ -71,6 +71,7 @@ export class DurableOutboxRepository {
         if (!this.database.commitFinancialTransaction) {
             throw new Error('El adaptador activo no soporta commit financiero SQLite atómico.');
         }
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_VALIDATE_START');
         const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
         for (const event of outboxEvents.filter(candidate => candidate.eventType.trim().toUpperCase() === 'SALE_POSTED')) {
             try {
@@ -90,9 +91,10 @@ export class DurableOutboxRepository {
             displayId: transaction?.displayId, eventId: input.outboxEvent.eventId, aggregateId: input.outboxEvent.aggregateId,
             summaryItemCount: input.outboxEvent.payload?.summary?.item_count };
         recordCheckoutDiagnostic('FINANCIAL_COMMIT_START', diagnostic);
-        await this.database.commitFinancialTransaction(input);
+        await this.database.commitFinancialTransaction(input, recordCheckoutDiagnostic);
         recordCheckoutDiagnostic('FINANCIAL_COMMIT_OK', diagnostic);
         await this.refreshMetrics();
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_METRICS_DONE');
     }
 
     async recoverExpiredLeases(now = new Date()): Promise<number> {

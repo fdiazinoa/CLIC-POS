@@ -431,6 +431,7 @@ class TransactionService {
             throw new Error('seriesId is required');
         }
         await db.assertFiscalTransactionAuthority(data);
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_AUTHORITY_DONE');
 
         if (isV3FinancialDocument(data) && options.deferDurablePersistence !== true) {
             throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
@@ -438,14 +439,18 @@ class TransactionService {
         if (isV3FinancialDocument(data)) {
             const config = await db.getDocument('config', 'current') as BusinessConfig | null;
             if (!config) throw new Error('SYNC_V3_CONFIG_REQUIRED');
+            recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_CONFIG_READ');
             const session = await getLargeMasterSyncV3OperationalSession();
+            recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_SESSION_DONE');
             const stamp = data.items![0].v3SaleAuthority!;
             const projected = await session.projectConfig(config);
+            recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_PROJECTION_DONE');
             const retained = await session.validate(projected, data.items!, stamp.tariffId,
                 stamp.warehouseId || '', data.documentType === 'REFUND' ? 'REFUND' : 'SALE', undefined,
                 { ticketId: data.restaurantOrderId, tableId: data.restaurantTableId, claimId: data.v3RestoredTicketId, originalTransactionId: data.originalTransactionId, reservationId: data.v3ReservationClaimId ? data.reservationId : undefined, reservationClaimId:data.v3ReservationClaimId });
             validateV3FrozenFiscalAmounts(data, retained);
             validateV3FrozenLineFiscalAmounts(data as Transaction, projected);
+            recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_V3_VALIDATED');
         }
 
         if (data.customerId) {
@@ -453,6 +458,7 @@ class TransactionService {
             data = withCustomerNumberSnapshot(data, customer);
         }
 
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_NUMBERING_START');
         const resolvedSeriesId = await this.resolveSeriesIdForEmission(
             data.documentType,
             data.terminalId,
@@ -463,6 +469,7 @@ class TransactionService {
         const { globalSequence, displayId, seriesNumber } =
             (data.v3ReservationClaimId||data.fiscalAllocationAuthorizationId||data.legacySaleNumbering===1) ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
         const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_AMOUNTS_DONE');
 
         // Create transaction object
         const transaction: Transaction = {
@@ -581,6 +588,7 @@ class TransactionService {
             consignmentSyncResponse: data.consignmentSyncResponse
         };
 
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_CANONICALIZE_START');
         const normalized = normalizeTransactionForSync(transaction);
         const newDirectV3Source = isV3FinancialDocument(data) && data.documentType === 'TICKET'
             && !data.v3CommitFingerprint && !data.v3Binding && !data.originalTransactionId
@@ -601,6 +609,7 @@ class TransactionService {
         }
         if (!deferToFinancialCommit) {
             await db.assertFiscalTransactionAuthority(normalizedTransaction);
+            recordCheckoutDiagnostic('CHECKOUT_COMMIT_CREATE_LEGACY_WRITE_START');
             await db.saveDocument('transactions', normalizedTransaction);
             recordCheckoutDiagnostic('LEGACY_PERSIST_OK', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId });
             try {
