@@ -123,6 +123,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     getLocalInventoryDelta: 'read',
     assertCanRefresh: 'read',
     getLocalInventoryDeltas: 'read',
+    readOperationalCatalogSale: 'read',
     getOperationalSupports: 'read',
     replaceInventorySnapshot: 'write',
     getInventorySnapshotVersion: 'read',
@@ -145,24 +146,38 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly fiscalCreditApplicationStore=new NativeFiscalCreditApplicationStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly fiscalReturnStore=new NativeFiscalReturnStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
-    public readonly masterSyncV3Store = this.serializedMasterStore();
+    private readonly ownedMasterSyncV3Store = this.createMasterStore();
+    public readonly masterSyncV3Store = this.serializedMasterStore(this.ownedMasterSyncV3Store);
 
-    private serializedMasterStore():LargeMasterSyncV3SqliteStore {
-        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
+    private createMasterStore(): LargeMasterSyncV3SqliteStore {
+        return new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
             try { return await operation(); }
             catch(error) {
                 if(error instanceof LargeMasterSyncV3Error && error.code==='SYNC_V3_CONNECTION_UNCERTAIN') this.financialConnectionError=error;
                 throw error;
             }
         }),undefined,()=>this.readConfigOwned());
+    }
 
+    private serializedMasterStore(store: LargeMasterSyncV3SqliteStore): LargeMasterSyncV3SqliteStore {
         return new Proxy(store,{get:(target,key)=>{
             const value=Reflect.get(target,key);
             if(typeof value!=='function') return value;
             // Internal calls retain the raw target and explicit connection. Public observers wait for committed state.
             const mode=NATIVE_V3_METHOD_CONCURRENCY[key as keyof typeof NATIVE_V3_METHOD_CONCURRENCY];
             if(!mode) throw new Error('NATIVE_MASTER_STORE_METHOD_UNCLASSIFIED:'+String(key));
-            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(async()=>{
+            if (mode === 'write') return value.bind(target);
+            if (key === 'readOperationalCatalogSale') {
+                return (...args: Parameters<LargeMasterSyncV3SqliteStore['readOperationalCatalogSale']>) => {
+                    const observe = args[3];
+                    observe?.('QUEUE_START');
+                    return this.withWriteLock(() => {
+                        observe?.('QUEUE_END');
+                        return target.readOperationalCatalogSale(...args);
+                    });
+                };
+            }
+            return (...args:any[])=>this.withWriteLock(async()=>{
                 try { return await value.apply(target,args); }
                 catch(error) {
                     if(error instanceof BaselineReferenceConnectionUncertainError) this.financialConnectionError=error;
@@ -562,6 +577,63 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+    }
+
+    readV3OperationalAuthorityConfig(): Promise<import('../../sync/LargeMasterSyncV3OperationalConfigScope').V3OperationalAuthorityConfig | null> {
+        return this.withWriteLock(() => this.readV3OperationalAuthorityConfigOwned());
+    }
+
+    readV3OperationalAuthority(...[runtime, assertConfig, observe]: Parameters<NonNullable<DatabaseAdapter['readV3OperationalAuthority']>>) {
+        observe('QUEUE_START');
+        return this.withWriteLock(async () => {
+            observe('QUEUE_END');
+            observe('CONFIG_START');
+            try {
+                const config = await this.readV3OperationalAuthorityConfigOwned() ?? await this.readConfigOwned();
+                assertConfig(config);
+            } finally {
+                observe('CONFIG_END');
+            }
+            observe('SNAPSHOT_START');
+            try {
+                return await this.ownedMasterSyncV3Store.readOperationalSnapshot(runtime);
+            } finally {
+                observe('SNAPSHOT_END');
+            }
+        });
+    }
+
+    private async readV3OperationalAuthorityConfigOwned() {
+        // Other config layouts go through the legacy reader, which owns the precedence and error rules.
+        // JSON values preserve types and complete policy objects for the shared JS scope check.
+        const result = await this.ensureDb().query(`
+            SELECT CASE WHEN json_valid(doc.data) THEN CASE
+                WHEN (doc.data ->> '$.id') = 'current'
+                AND json_type(doc.data, '$.terminals') = 'array'
+                AND NOT EXISTS (
+                    SELECT 1 FROM json_each(doc.data, '$.terminals') AS terminal
+                    WHERE CASE WHEN terminal.type = 'object' THEN json_type(terminal.value, '$.config') END IS NOT 'object'
+                )
+                THEN (SELECT json_group_array(json_object(
+                    'id', terminal.value -> '$.id',
+                    'config', json_object(
+                        'erpTerminalId', terminal.value -> '$.config.erpTerminalId',
+                        'currentDeviceId', terminal.value -> '$.config.currentDeviceId',
+                        'erpBinding', terminal.value -> '$.config.erpBinding',
+                        'inventoryScope', terminal.value -> '$.config.inventoryScope',
+                        'pricing', terminal.value -> '$.config.pricing',
+                        'fiscal', terminal.value -> '$.config.fiscal'
+                    )
+                )) FROM json_each(doc.data, '$.terminals') AS terminal)
+            END END AS terminals
+            FROM documents AS doc
+            WHERE doc.collection_name = ? AND doc.doc_id = ?
+            AND NOT EXISTS (
+                SELECT 1 FROM documents AS sibling
+                WHERE sibling.collection_name = doc.collection_name AND sibling.doc_id <> doc.doc_id
+            )`, ['config', 'current']);
+        const terminals = result.values?.[0]?.terminals;
+        return typeof terminals === 'string' ? { terminals: JSON.parse(terminals) } : null;
     }
 
     readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
