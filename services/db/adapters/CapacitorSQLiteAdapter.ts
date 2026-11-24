@@ -1,4 +1,3 @@
-import { recordCheckoutDiagnostic } from '../../CheckoutDiagnostics';
 import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
@@ -815,11 +814,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async abandonDispatchPrecharge(checkoutId:string):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonDispatchPrecharge(this.ensureDb() as any,checkoutId),true));
     }
-    async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
-        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_PLAN_START');
+    async commitFinancialTransaction(input: FinancialCommitInput, recordTiming?: (stage: string) => void): Promise<void> {
+        recordTiming?.('CHECKOUT_COMMIT_NATIVE_PLAN_START');
         if(input.dispatchCommit)input=snapshotDispatchFinancialPlan(input);
         const dispatchIntent=input.dispatchCommit?await dispatchFinancialIntentDigest(input):null;
-        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_DIGEST_DONE');
+        recordTiming?.('CHECKOUT_COMMIT_NATIVE_DIGEST_DONE');
         let sealedDispatchEvent=false;let sealedDispatchSource:Record<string,unknown>|null=null;let dispatchReplayed=false;
         const assertDispatchOutbox=async()=>{if(!sealedDispatchEvent)return;for(const event of [input.outboxEvent,...(input.additionalOutboxEvents||[])]){const row=(await this.ensureDb().query('SELECT * FROM sync_outbox_v2 WHERE event_id=?',[event.eventId])).values?.[0];
             if(!row||row.event_type!==event.eventType||row.aggregate_type!==event.aggregateType||row.aggregate_id!==event.aggregateId||Number(row.schema_version)!==event.schemaVersion||row.created_at!==event.createdAt||canonicalDispatchJSON(JSON.parse(row.payload_json))!==canonicalDispatchJSON(event.payload))throw Error('DISPATCH_OUTBOX_EVENT_CONFLICT');
@@ -852,7 +851,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
-        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_DOCUMENT_JSON_DONE');
+        recordTiming?.('CHECKOUT_COMMIT_NATIVE_DOCUMENT_JSON_DONE');
         const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
         for (const event of outboxEvents) {
             statements.push({
@@ -884,15 +883,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
-        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_OUTBOX_JSON_DONE');
+        recordTiming?.('CHECKOUT_COMMIT_NATIVE_OUTBOX_JSON_DONE');
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(async()=>{
           const legacyTxs=input.documents.filter(row=>row.collectionName==='transactions'&&(row.document as any)?.fiscalIssuance&&!(row.document as any).fiscalAllocationAuthorizationId).map(row=>row.document as any);
-          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_LOCK_ACQUIRED');
+          recordTiming?.('CHECKOUT_COMMIT_NATIVE_LOCK_ACQUIRED');
           const fiscalStatements=(await Promise.all(legacyTxs.map(tx=>this.planLegacyFiscalCommit(tx)))).flat();
           await this.executeUnlocked([...statements,...fiscalStatements],async()=>{
-          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_CHECKS_START');
+          recordTiming?.('CHECKOUT_COMMIT_NATIVE_CHECKS_START');
           const guardedPool=(await this.ensureDb().query("SELECT p.pool_id,p.state FROM pos_dispatch_pool_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND p.state IN('WAREHOUSE_DISPATCH','FROZEN')")).values?.[0];
           if(guardedPool&&input.documents.some(d=>d.collectionName==='transactions')&&!input.dispatchCommit)throw Error('DISPATCH_CANONICAL_POOL_REQUIRES_ESCROW_COMMIT');
           const dispatchSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1');
@@ -969,9 +968,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
-          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_CHECKS_DONE');
+          recordTiming?.('CHECKOUT_COMMIT_NATIVE_CHECKS_DONE');
         },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit),assertDispatchOutbox);
-          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_INSERTS_COMMITTED');
+          recordTiming?.('CHECKOUT_COMMIT_NATIVE_INSERTS_COMMITTED');
           for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
         });
     }

@@ -160,7 +160,7 @@ export interface DatabaseAdapter {
 
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
-    commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+    commitFinancialTransaction?(input: FinancialCommitInput, recordTiming?: (stage: string) => void): Promise<void>;
     readDispatchCommittedReceipt?(transactionId:string):Promise<import('../../types').Transaction|null>;
     readDispatchPendingCheckout?(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../types').PaymentEntry[];receipt?:import('../../types').Transaction;fiscalCheckout?:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2}|null>;
     readDispatchCheckoutAuthority?(checkoutId?:string,items?:import('../../types').CartItem[]):Promise<import('../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>;

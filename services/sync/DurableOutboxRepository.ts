@@ -91,7 +91,7 @@ export class DurableOutboxRepository {
             displayId: transaction?.displayId, eventId: input.outboxEvent.eventId, aggregateId: input.outboxEvent.aggregateId,
             summaryItemCount: input.outboxEvent.payload?.summary?.item_count };
         recordCheckoutDiagnostic('FINANCIAL_COMMIT_START', diagnostic);
-        await this.database.commitFinancialTransaction(input);
+        await this.database.commitFinancialTransaction(input, recordCheckoutDiagnostic);
         recordCheckoutDiagnostic('FINANCIAL_COMMIT_OK', diagnostic);
         await this.refreshMetrics();
         recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_METRICS_DONE');
