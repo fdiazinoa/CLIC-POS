@@ -210,3 +210,30 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
     }
   }
 });
+
+test('adding an item acknowledges only the cart commit with the expected line and quantity', () => {
+  const text = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const pending = text.indexOf('const pendingAddCommit =');
+  const start = text.indexOf('useLayoutEffect(() => {', pending);
+  const end = text.indexOf('}, [cart]);', start);
+  assert.ok(pending >= 0 && start > pending && end > start);
+  const run = new Function('useLayoutEffect', 'cart', 'pendingAddCommit', 'markInteractionStage', 'commitInteractionDestination', 'uiLifetime',
+    text.slice(start, end + '}, [cart]);'.length));
+  const trace = { id: 'test-add' };
+  const pendingAdd = { current: { trace, line: { cartId: 'line-1', quantity: 2 } } };
+  const events: string[] = [];
+  const capture = () => true;
+  const render = (cart: Array<{ cartId: string; quantity: number }>) =>
+    run((effect: () => void) => effect(), cart, pendingAdd,
+      (t: unknown, stage: string) => { assert.equal(t, trace); events.push(stage); },
+      (t: unknown, target: string, _: unknown, current: () => boolean) => { assert.equal(t, trace); assert.equal(current, capture); events.push(target); },
+      { current: { capture: () => capture } });
+  render([{ cartId: 'line-2', quantity: 2 }]);
+  render([{ cartId: 'line-1', quantity: 1 }]);
+  assert.deepEqual(events, []);
+  render([{ cartId: 'line-1', quantity: 2 }]);
+  assert.deepEqual(events, ['ADD_CART_COMMIT', 'POS_ADD_ITEM']);
+  assert.equal(pendingAdd.current, null);
+  render([{ cartId: 'line-1', quantity: 2 }]);
+  assert.equal(events.length, 2);
+});

@@ -143,3 +143,53 @@ for (const drift of [false, true]) test(`cached UI acquisition waits for an acti
     assert.deepEqual(f.documents('inventoryLedger'), []);
   } finally { release(); f.close(); }
 });
+
+test('SQLite authority projection matches the full decoder and declines ambiguous storage', async () => {
+  const f = await nativeFixture();
+  try {
+    const config = f.documents('config')[0];
+    config.terminals[0].config.fiscal = { environment: 0, enabled: false, customPolicy: { order: [true, false, null] } };
+    config.terminals[0].config.erpSnapshot = { masters: { items: [{ id: 'irrelevant' }] } };
+    config.terminalSnapshots = { irrelevant: 'x'.repeat(20_000) };
+    await f.adapter.saveCollection('config', config);
+    const selector = { localTerminalId: config.terminals[0].id };
+    const full = await f.adapter.getCollection('config');
+    const projected = await f.adapter.readV3OperationalAuthorityConfig();
+    assert.ok(projected);
+    assert.equal(v3OperationalConfigContext(projected, selector).key, v3OperationalConfigContext(full, selector).key);
+    assert.ok(JSON.stringify(projected).length < JSON.stringify(full).length);
+    assert.deepEqual(projected.terminals[0].config.fiscal, full.terminals[0].config.fiscal);
+
+    config.terminals[0].config.fiscal.enabled = true;
+    await f.adapter.saveCollection('config', config);
+    const changed = await f.adapter.readV3OperationalAuthorityConfig();
+    assert.ok(changed);
+    assert.notEqual(v3OperationalConfigContext(changed, selector).scope, v3OperationalConfigContext(projected, selector).scope);
+
+    f.db.prepare("INSERT INTO documents(collection_name,doc_id,data,sort_order,updatedAt) VALUES('config','metadata',?,1,'test')").run('{"id":"config_metadata"}');
+    assert.equal(await f.adapter.readV3OperationalAuthorityConfig(), null);
+    assert.equal(v3OperationalConfigContext(await f.adapter.getCollection('config'), selector).key, v3OperationalConfigContext(changed, selector).key);
+  } finally { f.db.close(); }
+});
+
+test('adding a line still checks fresh config and inventory snapshots with the projection', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    const trace = { stages: {} };
+    let projected = 0;
+    const project = f.adapter.readV3OperationalAuthorityConfig.bind(f.adapter);
+    f.adapter.readV3OperationalAuthorityConfig = async () => { projected++; return project(); };
+    await session.assertCurrent({ trace });
+    f.db.prepare("UPDATE master_v3_inventory_state SET cursor='changed'").run();
+    await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+    assert.equal(projected, 2);
+
+    const config = structuredClone(f.env.config);
+    config.terminals[0].config.pricing.allowedTariffIds = [id(999)];
+    await f.adapter.saveCollection('config', config);
+    await assert.rejects(session.assertCurrent({ trace, recheck: true }), /SYNC_V3_BINDING_CHANGED/);
+    assert.equal(projected, 3);
+    assert.deepEqual(f.documents('transactions'), []);
+  } finally { f.close(); }
+});
