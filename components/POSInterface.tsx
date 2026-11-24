@@ -4667,7 +4667,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       selectedCustomer?.requiresFiscalInvoice
    ]);
 
-   const [fiscalReceiptRecoveryAvailable,setFiscalReceiptRecoveryAvailable]=useState(false);
+   const [fiscalReceiptRecovery, setFiscalReceiptRecovery] = useState<{
+      cart: typeof cart; scope: string; customerId: string | undefined; tableId?: NonNullable<typeof activeTable>['id'];
+      orderId?: NonNullable<typeof activeTable>['currentOrderId'];
+   } | null>(null);
    const [receiptOnlyInitialTransaction,setReceiptOnlyInitialTransaction]=useState<Transaction|null>(null);
    const usesDelegatedEcf = Boolean(v3Operational) && fiscalCompliance.mode === 'ECF'
       && getDefaultFiscalProvider(config, activeTerminalConfig) === 'MSELLER';
@@ -4683,6 +4686,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const fiscalDisplayStatus = isFiscalDisplayScopeCurrent ? fiscalStatus : {
       type: requiredSaleFiscalType, hasNCF: false, verificationUnavailable: true,
    };
+   const fiscalReceiptRecoveryAvailable = fiscalReceiptRecovery?.cart === cart
+      && fiscalReceiptRecovery.scope === fiscalCheckScope
+      && fiscalReceiptRecovery.customerId === effectiveSelectedCustomer?.id
+      && fiscalReceiptRecovery.tableId === activeTable?.id
+      && fiscalReceiptRecovery.orderId === activeTable?.currentOrderId;
+   useEffect(() => {
+      let active = true;
+      let generation = 0;
+      const refresh = async () => {
+         const request = ++generation;
+         const receipt = await measureSettingsReturnQa('fiscal.receiptRecovery', () => resolveCommittedFiscalReceipt()).catch(() => null);
+         if (!active || request !== generation || currentFiscalCheckScope.current !== fiscalCheckScope) return;
+         setFiscalReceiptRecovery(receipt ? { cart, scope: fiscalCheckScope, customerId: effectiveSelectedCustomer?.id,
+            tableId: activeTable?.id, orderId: activeTable?.currentOrderId } : null);
+      };
+      void refresh();
+      window.addEventListener('transactionsUpdated', refresh);
+      window.addEventListener('offlineFiscalReserveUpdated', refresh);
+      window.addEventListener('configUpdated', refresh);
+      return () => {
+         active = false;
+         window.removeEventListener('transactionsUpdated', refresh);
+         window.removeEventListener('offlineFiscalReserveUpdated', refresh);
+         window.removeEventListener('configUpdated', refresh);
+      };
+   }, [cart, effectiveSelectedCustomer?.id, activeTable?.id, activeTable?.currentOrderId, showPaymentModal, v3Operational, fiscalCompliance.mode, fiscalCheckScope]);
+
    useEffect(() => {
       let cancelled = false;
       let checking = false;
@@ -4690,8 +4720,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const checkFiscalStatus = async (isCurrent: () => boolean) => {
          const type = requiredSaleFiscalType;
-         try{const receipt=await measureSettingsReturnQa('fiscal.receiptRecovery', () => resolveCommittedFiscalReceipt());if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
-         catch{if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(false);}
          if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
             setFiscalStatus({
@@ -4791,10 +4819,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [
       v3Operational,
       fiscalCompliance.mode,
-      cart,
-      effectiveSelectedCustomer?.id,
-      activeTable?.id,
-      activeTable?.currentOrderId,
       showPaymentModal,
       isFiscalModeDisabled,
       isOrderTakerMode,
@@ -7253,6 +7277,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const dispatchCheckoutRef=useRef<{checkoutId:string;transactionId:string;source:Record<string,any>;effectPossible:boolean;recoveryPayments?:PaymentEntry[]}|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
+      setOfflineFiscalReserveInfo(null);
+      if (!showPaymentModal) return;
       let disposed=false;
       const update=()=>{void fiscalWorkflowV2Client.offlineStatus().then(value=>{if(!disposed)setOfflineFiscalReserveInfo(value);});};
       update();window.addEventListener('offlineFiscalReserveUpdated',update);window.addEventListener('transactionsUpdated',update);

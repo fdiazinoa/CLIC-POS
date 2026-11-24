@@ -431,6 +431,16 @@ export class LargeMasterSyncV3OperationalSession {
       syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
       version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor });
     const currentCatalog = await this.catalogAfterAssert(tariffId, warehouseId);
+    // Reuse reads only inside this validation. Each line still checks its own authority and price.
+    const currentArticles = new Map<string, ReturnType<typeof currentCatalog.get>>();
+    const readCurrentArticle = (id: string) => {
+      let article = currentArticles.get(id);
+      if (!article) {
+        article = currentCatalog.get(id);
+        currentArticles.set(id, article);
+      }
+      return article;
+    };
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
     let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
     const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();
@@ -443,7 +453,7 @@ export class LargeMasterSyncV3OperationalSession {
       // A refund is authorized by the independently read original even when its catalog is still current.
       if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
-        return currentCatalog.get(line.id);
+        return readCurrentArticle(line.id);
       }
       if (!refund) assertV3RetainedLine(line, retained);
       // Delivery of an already committed invoice is distinct from a new sale/refund checkout.
@@ -485,7 +495,7 @@ export class LargeMasterSyncV3OperationalSession {
       const currentGeneration = stamp?.syncId === this.ready.runtime.version.syncId
         && stamp.syncVersion === this.ready.runtime.version.syncVersion;
       const source = await sourceFor(line);
-      const current = currentGeneration ? source : await currentCatalog.get(line.id);
+      const current = currentGeneration ? source : await readCurrentArticle(line.id);
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');

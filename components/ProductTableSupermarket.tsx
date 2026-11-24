@@ -43,7 +43,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
             }
             const timer = setTimeout(() => {
                 setHighlightedId(null);
-            }, 1500); // Extended visual pulse
+            }, 350);
             return () => clearTimeout(timer);
         }
     }, [lastAddedCartId]);
@@ -87,8 +87,8 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     preventDefault: () => event.preventDefault(),
                                 })}
                                 className={`
-                                    group cursor-pointer transition-colors duration-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
-                                    ${isHighlighted ? 'bg-blue-50/80 animate-pulse' : 'hover:bg-gray-50'}
+                                    group cursor-pointer transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
+                                    ${isHighlighted ? 'bg-blue-50/80' : 'hover:bg-gray-50'}
                                     ${isReturn ? 'bg-red-50/30' : ''}
                                 `}
                             >

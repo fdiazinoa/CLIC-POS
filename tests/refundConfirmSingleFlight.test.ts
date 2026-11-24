@@ -3,13 +3,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {transform} from 'esbuild';
-async function handler(onConfirm:()=>Promise<unknown>){
+async function handler(onConfirm:()=>Promise<unknown>, canConfirm = true){
  const source=readFileSync(new URL('../components/RefundModal.tsx',import.meta.url),'utf8');
  const segment=source.slice(source.indexOf('    const handleConfirm ='),source.indexOf('\n    return (',source.indexOf('    const handleConfirm =')));
  const code=(await transform(segment,{loader:'ts'})).code;
  const ref={current:false},states:boolean[]=[],errors:string[]=[];
- const create=new Function('f',`const {submittingRef,setSubmitting,setSubmitError,transaction,refundQuantities,itemConditions,reason,onConfirm,describeV3Error,settlementState,settlementDestination}=f;${code};return handleConfirm;`);
- return{ref,states,errors,run:create({submittingRef:ref,setSubmitting:(value:boolean)=>states.push(value),setSubmitError:(value:string)=>errors.push(value),transaction:{items:[{cartId:'L',quantity:1}]},refundQuantities:new Map([['L',1]]),itemConditions:new Map(),reason:'Return',onConfirm,describeV3Error,settlementState:null,settlementDestination:'ORIGINAL_PAYMENT'})};
+ const create=new Function('f',`const {submittingRef,setSubmitting,setSubmitError,canConfirm,transaction,refundQuantities,itemConditions,reason,onConfirm,describeV3Error,settlementState,settlementDestination}=f;${code};return handleConfirm;`);
+ return{ref,states,errors,run:create({canConfirm,submittingRef:ref,setSubmitting:(value:boolean)=>states.push(value),setSubmitError:(value:string)=>errors.push(value),transaction:{items:[{cartId:'L',quantity:1}]},refundQuantities:new Map([['L',1]]),itemConditions:new Map(),reason:'Return',onConfirm,describeV3Error,settlementState:null,settlementDestination:'ORIGINAL_PAYMENT'})};
 }
 test('same-tick duplicate Confirm spans slow approval/preparation/commit and finally unlocks',async()=>{
  let release!:()=>void,calls=0;const pending=new Promise<void>(resolve=>release=resolve);
@@ -46,4 +46,12 @@ test('cashier without void permission can see supervisor above RefundModal and c
  const authorizeCode=(await transform(segment,{loader:'ts'})).code;
  const authorize=new Function('f',`const {users,roles,pin,requiredPermission,requestedDiscountPercent,onAuthorize,setPin,setError}=f;${authorizeCode};return handleAuthorize;`)({users:[staff,supervisor],roles,pin:'9999',requiredPermission:'POS_VOID_PAID_TICKET',onAuthorize:auth.supervisorModalProps.onAuthorize,setPin:()=>{},setError:()=>{}});
  authorize();await approved;assert.equal(effects,1);assert.equal(refund.ref.current,false);assert.equal(renderHook().supervisorModalProps.isOpen,false);
+});
+
+test('an unavailable quantity never starts a refund',async()=>{
+ let calls=0;
+ const f=await handler(async()=>{calls++;}, false);
+ await f.run();
+ assert.equal(calls,0);
+ assert.deepEqual(f.states,[]);
 });
