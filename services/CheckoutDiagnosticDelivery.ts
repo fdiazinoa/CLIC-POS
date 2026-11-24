@@ -7,7 +7,7 @@ const stages: Record<string, string> = {
     CART_RENDER: 'CART_CHANGED', CART_CLEAR_REQUEST: 'CART_CLEARED', TABLE_CART_CLEAR: 'TABLE_HYDRATED', TABLE_CART_REPLACE: 'TABLE_HYDRATED',
     TRANSACTION_CREATE_INPUT: 'TRANSACTION_CREATED', TRANSACTION_CREATED: 'TRANSACTION_CREATED',
     LEGACY_PERSIST_OK: 'TRANSACTION_PERSISTED', FINANCIAL_COMMIT_START: 'OUTBOX_CREATED', FINANCIAL_COMMIT_OK: 'TRANSACTION_PERSISTED',
-    OUTBOX_BUILD: 'OUTBOX_CREATED', OUTBOX_SEND: 'OUTBOX_SEND_STARTED', OUTBOX_RESULT: 'OUTBOX_SEND_RESULT',
+    CHECKOUT_DOCUMENT_READS: 'OUTBOX_CREATED', OUTBOX_BUILD: 'OUTBOX_CREATED', OUTBOX_SEND: 'OUTBOX_SEND_STARTED', OUTBOX_RESULT: 'OUTBOX_SEND_RESULT',
     PRINT_DELIVERY_PLAN: 'PRINT_RESULT', PRINT_REQUEST: 'PRINT_REQUESTED', PRINT_RESULT: 'PRINT_RESULT',
 };
 const scalar = (v: unknown) => typeof v === 'string' ? v.slice(0,160) : typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -41,6 +41,7 @@ export function diagnosticEvent(record: CheckoutDiagnosticRecord, sequence: numb
         details: { operating_mode:record.capture?.mode ?? null, captured_apk_version:record.capture?.versionName ?? null, captured_apk_code:record.capture?.versionCode ?? null, phase:record.stage, total_recorded:hasTotal, items_recorded:d.itemCount != null, source_stage: record.stage.slice(0,100), checkout_id: record.checkoutId, reason: scalar(d.reason), status: scalar(d.status),
             aggregate_id: scalar(d.aggregateId), lines_truncated: Boolean(d.linesTruncated) || Number(d.itemCount) > 50,
             payments: (Array.isArray(d.payments) ? d.payments.slice(0,20) : []).map(p => ({ id: scalar(p.id), method: scalar(p.method), amount: scalar(p.amount), applied: scalar(p.applied), change: scalar(p.change) })),
+            ...(record.stage === 'CHECKOUT_DOCUMENT_READS' && d.documentReads ? { document_reads: d.documentReads } : {}),
             ...(d.performance && typeof d.performance === 'object' ? { performance: d.performance } : {}),
             ...(record.stage === 'TRACKING_ENABLED' && d.environment && typeof d.environment === 'object' ? { environment: d.environment } : {}),
         },
