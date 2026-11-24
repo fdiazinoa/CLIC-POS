@@ -74,6 +74,21 @@ CREATE TRIGGER IF NOT EXISTS pos_allocation_member_revoke_update_v2 AFTER UPDATE
 const row=async(sql:SQL,query:string,params:any[]=[])=> (await sql.query(query,params)).values?.[0];
 const document=async<T>(sql:SQL,name:string,id:string):Promise<T>=>{const value=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[name,id]);if(!value)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');return JSON.parse(value.data);};
 
+async function readAllocationDocuments(sql: SQL, keys: readonly (readonly [string, string])[]) {
+ const result = await sql.query(
+  `SELECT collection_name, data FROM documents WHERE ${keys.map(() => '(collection_name=? AND doc_id=?)').join(' OR ')}`,
+  keys.flat(),
+ );
+ // Each batch requests at most one document per collection.
+ return new Map<string, string>((result.values || []).map(value => [value.collection_name, value.data]));
+}
+
+function requireAllocationDocument<T>(data: string | undefined): T {
+ if (data === undefined) allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+ return JSON.parse(data);
+}
+
+
 async function assertDirectAllocationCharge(sql:SQL,cart:any,local:OfflineFiscalLocalAuthority):Promise<void>{
  if(cart.fiscalSaleContext||cart.serviceChargeAmount===undefined||cart.serviceChargeAmount===0)return;
  const config=await document<BusinessConfig>(sql,'config','current');
@@ -142,14 +157,16 @@ async function canRestoreRetainedBlockMarker(
 
  return await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix)===buffer.currentNumber;
 }
-export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
+export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string,checkedConfig?:BusinessConfig){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
  if(!members.length)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let expired=false;
- const config=await document<BusinessConfig>(sql,'config','current');
+ const config=checkedConfig ?? await document<BusinessConfig>(sql,'config','current');
  for(const member of members){try{assertAllocationMemberTime(member,time);}catch{expired=true;continue;}
-  const allocation=await document<FiscalAllocation>(sql,'fiscalAllocations',member.allocationId),range=await document<FiscalRangeDGII>(sql,'fiscalRanges',member.fiscalRangeId);
+  const rows=await readAllocationDocuments(sql,[['fiscalAllocations',member.allocationId],['fiscalRanges',member.fiscalRangeId]]);
+  const allocation=requireAllocationDocument<FiscalAllocation>(rows.get('fiscalAllocations'));
+  const range=requireAllocationDocument<FiscalRangeDGII>(rows.get('fiscalRanges'));
   if(allocation.terminalId!==authority.scope.terminalId||!['ACTIVE','EXHAUSTED'].includes(allocation.status)||allocation.releasedAt||allocation.reservedStart!==member.start||allocation.reservedEnd!==member.end||allocation.fiscalRangeId!==member.fiscalRangeId||range.isActive!==true||range.type!==type||range.prefix!==member.prefix||range.startNumber!==member.rangeStart||range.endNumber!==member.rangeEnd||(range.expiryDate||null)!==member.expiryDate)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
   const buffers=(await sql.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
@@ -221,16 +238,20 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  await sql.run('INSERT INTO pos_fiscal_checkout_current_v2(scope_key,checkout_id)VALUES(?,?)',[key,checkout.checkoutId],false);return checkout;
 }
 export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCheckoutV2,recovery=false){
- if(!checkout.allocation)allocationFail();const config=await document<BusinessConfig>(sql,'config','current'),local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery);
+ if(!checkout.allocation)allocationFail();
+ const configRow=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',['config','current']);
+ const config=requireAllocationDocument<BusinessConfig>(configRow?.data);
+ const local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery);
  if(!recovery)await assertDirectAllocationCharge(sql,JSON.parse(checkout.cartIdentity),local);
  if(!proof||proof.authority.authorityHash!==checkout.allocation.authorityHash||checkout.offlineBindingHash!==local.bindingHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const claim=await row(sql,'SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?',[checkout.checkoutId]);
  if(!claim||claim.transaction_id!==checkout.transactionId||claim.authorization_id!==proof.authority.authorizationId||claim.environment!==proof.authority.environment||claim.ncf!==checkout.allocation.ncf||claim.sequence!==checkout.allocation.sequence||claim.allocation_id!==checkout.allocation.allocationId||!['PREPARED','EFFECT_POSSIBLE'].includes(claim.state))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
  const at=recovery?Date.parse(checkout.offlineEffectAt||''):proof.now;
  if(!Number.isFinite(at)||at<Date.parse(proof.authority.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
- const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation);
+ // This caller holds the same native transaction through selection and validation.
+ const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation,undefined,config);
  if(planned.restoreRetainedBlockMarker)await assertRetainedBlockMarkerOwner(sql,planned.allocation.id,checkout.checkoutId);
- return {...proof,planned};
+ return {...proof,planned,configData:configRow.data as string};
 }
 /** Historical identity proof only: no current availability, clock or pricing reads. */
 async function dispatchBaseCatalogues(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<Map<string,any>>{
@@ -323,10 +344,16 @@ export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAut
 }
 export async function allocationCommitPreconditions(sql:SQL,checkout:FiscalWorkflowCheckoutV2){
  const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');
- const ids=[['config','current'],['fiscalAllocations',proof.planned.allocation.id],['fiscalRanges',proof.planned.range.id],['localFiscalBuffer',proof.planned.buffer.id]];
- const snapshots=[];
- for(const [collection,id] of ids){const saved=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);snapshots.push({collection,id,expected:saved?.data||null});}
- return snapshots;
+ const ids = [
+  ['fiscalAllocations',proof.planned.allocation.id],
+  ['fiscalRanges',proof.planned.range.id],
+  ['localFiscalBuffer',proof.planned.buffer.id],
+ ] as const;
+ const snapshots=await readAllocationDocuments(sql,ids);
+ return [
+  {collection:'config',id:'current',expected:proof.configData||null},
+  ...ids.map(([collection,id])=>({collection,id,expected:snapshots.get(collection)||null})),
+ ];
 }
 
 /** Completed authority stays readable after withdrawal; verification uses the immutable local receipt, never new eligibility. */

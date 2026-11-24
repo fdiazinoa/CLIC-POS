@@ -66,6 +66,35 @@ async function fixtureWithLaggingE32(){
  return f;
 }
 
+test('offline commit snapshots read config once and batch independent fiscal document reads',async()=>{
+ const f=await fixture({buffer:false});
+ try{
+  const checkout=await f.client().reserveOfflineCheckout(identity('batch-reads'),'batch-reads');
+  const select=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?');
+  const rawConfig=String(select.get('config','current')!.data);
+  const formattedConfig=JSON.stringify(JSON.parse(rawConfig),null,2);
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(formattedConfig);
+
+  const queries:Array<{query:string;values:unknown[]}>=[];
+  const query=f.bridge.query;
+  f.bridge.query=(sql,values=[])=>{
+   queries.push({query:sql,values});
+   return query(sql,values);
+  };
+  const snapshots=await f.store.allocationCommitPreconditions!(checkout);
+  assert.deepEqual(snapshots,[
+   {collection:'config',id:'current',expected:formattedConfig},
+   {collection:'fiscalAllocations',id:f.allocation.id,expected:select.get('fiscalAllocations',f.allocation.id)!.data},
+   {collection:'fiscalRanges',id:f.range.id,expected:select.get('fiscalRanges',f.range.id)!.data},
+   {collection:'localFiscalBuffer',id:checkout.allocation!.bufferId,expected:null},
+  ]);
+  assert.equal(queries.filter(q=>q.values[0]==='config'&&q.values[1]==='current').length,1);
+  const batches=queries.filter(q=>q.query.startsWith('SELECT collection_name, data FROM documents WHERE'));
+  assert.deepEqual(batches.map(q=>q.values.length),[4,6]);
+  assert.equal(f.count('sync_outbox_v2'),0);
+ }finally{f.sql.close();}
+});
+
 test('retained E32 cursor proves next NCF despite a lagging allocation snapshot without writes or reuse',async()=>{
  const f=await fixtureWithLaggingE32();
  try{
