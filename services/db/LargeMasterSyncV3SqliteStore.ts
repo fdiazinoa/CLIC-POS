@@ -15,6 +15,7 @@ import {
   type LargeMasterSyncV3Progress,
   type LargeMasterSyncV3RuntimeVersion,
   type LargeMasterSyncV3Store,
+  type V3CatalogSaleRead, type V3CatalogSaleReadStage,
   type V3CatalogPageRequest, type V3CatalogPage, type V3ProductionCatalogRequest, type V3ProductionCatalogPage,
 } from '../sync/LargeMasterSyncV3Types';
 import { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } from '../sync/LargeMasterSyncV3OperationGate';
@@ -1096,6 +1097,36 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     }
     const result = await this.connection().query(statement, parameters);
     return rows(result).map(operationalRecord);
+  }
+
+  async readOperationalCatalogSale(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string, tariffId: string,
+    observe?: (stage: V3CatalogSaleReadStage) => void): Promise<V3CatalogSaleRead> {
+    requireOperationalVersion(runtime);
+    const db = this.connection();
+    observe?.('SQLITE_START');
+    let result: QueryResult;
+    try {
+      // A missing article or price does not hide a valid inventory snapshot.
+      result = await db.query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
+        SELECT inventory.inventory_version, inventory.cursor, a.article_id, a.record_json, p.price
+        FROM inventory
+        LEFT JOIN master_v3_articles a ON a.sync_version = ? AND a.article_id = ? AND a.active = 1 AND a.sellable = 1
+        LEFT JOIN master_v3_prices p ON p.sync_version = a.sync_version AND p.article_id = a.article_id AND p.tariff_id = ?`,
+      [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion, runtime.syncVersion, articleId, tariffId]);
+    } finally {
+      observe?.('SQLITE_END');
+    }
+    const row = first(result);
+    if (!row) return { inventory: null, article: null, price: undefined };
+    const article = row.article_id == null ? null : operationalRecord(row);
+    if (article && (typeof article.id !== 'string' || article.id.trim() !== articleId)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVALID');
+    }
+    return {
+      inventory: { version: Number(row.inventory_version), cursor: String(row.cursor) },
+      article,
+      price: row.price == null ? undefined : Number(row.price),
+    };
   }
 
   async getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null> {

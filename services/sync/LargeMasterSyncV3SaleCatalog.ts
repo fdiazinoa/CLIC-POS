@@ -61,22 +61,23 @@ export class LargeMasterSyncV3SaleCatalog {
     const prices = await this.runtime.getPrices(eligible.map(article => id(article.id)), this.tariffId);
     const byArticle = new Map(prices.filter(price => price.tariffId === this.tariffId)
       .map(price => [price.articleId, price.price]));
-    return eligible.flatMap(article => {
-      const price = byArticle.get(id(article.id));
-      // An unpriced article is not sellable on this tariff, even if another
-      // tariff has a price. Never use article.price or a legacy fallback.
-      if (typeof price !== 'number' || !Number.isFinite(price) || price < 0) return [];
-      const taxIds = article.taxIds;
-      if (!Array.isArray(taxIds) || taxIds.some(taxId => !id(taxId))) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_INVALID');
-      }
-      const resolvedTaxes = taxIds.map(taxId => this.taxes.get(id(taxId)));
-      if (resolvedTaxes.some(tax => !tax) || (article.taxable === true && !resolvedTaxes.length)) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_UNAVAILABLE');
-      }
-      return [{ article, price, tariff: this.tariff,
-        taxes: resolvedTaxes as RecordObject[], version: this.runtime.version }];
-    });
+    return eligible.flatMap(article => this.resolveArticle(article, byArticle.get(id(article.id))) ?? []);
+  }
+
+  resolveArticle(article: RecordObject, price: number | undefined): V3SaleArticle | null {
+    // Missing prices never fall back to the article record or another tariff.
+    if (!id(article.id) || article.active !== true || article.sellable !== true
+      || typeof price !== 'number' || !Number.isFinite(price) || price < 0) return null;
+    const taxIds = article.taxIds;
+    if (!Array.isArray(taxIds) || taxIds.some(taxId => !id(taxId))) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_INVALID');
+    }
+    const resolvedTaxes = taxIds.map(taxId => this.taxes.get(id(taxId)));
+    if (resolvedTaxes.some(tax => !tax) || (article.taxable === true && !resolvedTaxes.length)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_UNAVAILABLE');
+    }
+    return { article, price, tariff: this.tariff,
+      taxes: resolvedTaxes as RecordObject[], version: this.runtime.version };
   }
 
   categories() { return this.runtime.getOperationalCategories(this.tariffId); }

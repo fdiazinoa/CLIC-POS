@@ -8,6 +8,9 @@ import { CapacitorSQLiteAdapter } from '../services/db/adapters/CapacitorSQLiteA
 import type { DurableDocumentMutation } from '../services/db/DatabaseAdapter';
 import { resetLargeMasterSyncV3OperationGateForTests, setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 import { v3StockSource } from '../services/sync/LargeMasterSyncV3StockAuthority';
+import { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV3Runtime';
+import { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
+import { beginPosInteraction } from '../utils/interactionPerformance';
 
 const baseline = JSON.stringify(['binding', 'S', 47, 4, 'C']);
 const stamp = { binding: 'binding', warehouseId: 'W', syncId: 'S', syncVersion: 47, tariffId: 'T', taxIncluded: false,
@@ -71,6 +74,65 @@ test('operational snapshot matches the separate reads before and after catalog r
     await f.store.activateCatalogOnly('N', await f.transition());
     await compare({ syncId: 'N', syncVersion: 102, contractVersion: 2 });
     await compare(original);
+  } finally { f.sql.close(); }
+});
+
+test('traced V3 add batches the initial snapshot, article and exact tariff price behind the native write lane', async () => {
+  const f = fixture();
+  try {
+    const runtime = (await LargeMasterSyncV3Runtime.open(f.adapter.masterSyncV3Store))!;
+    const catalog = await LargeMasterSyncV3OperationalCatalog.open({ runtime, inventoryVersion: 4, inventoryCursor: 'C' }, 'T', 'W');
+    const legacy = await catalog.get('P');
+    const stages = ['ADD_CATALOG_PRIMARY_QUEUE_START', 'ADD_CATALOG_PRIMARY_QUEUE_END',
+      'ADD_CATALOG_PRIMARY_SQLITE_START', 'ADD_CATALOG_PRIMARY_SQLITE_END'] as const;
+    const trace = beginPosInteraction('ADD_TICKET_ITEM');
+    const queries: string[] = [];
+    const query = f.bridge.query;
+    f.bridge.query = async (...args) => { queries.push(args[0]); return query(...args); };
+    let release!: () => void;
+    const blocker = new Promise<void>(resolve => { release = resolve; });
+    const hold = (f.adapter as unknown as { withWriteLock(work: () => Promise<void>): Promise<void> })
+      .withWriteLock(() => blocker);
+    const reading = catalog.get('P', trace, true);
+    try {
+      await Promise.resolve();
+      assert.ok(trace.stages[stages[0]] !== undefined);
+      assert.equal(trace.stages[stages[1]], undefined);
+      assert.deepEqual(queries, []);
+    } finally { release(); }
+    await hold;
+    assert.deepEqual(await reading, legacy);
+    assert.deepEqual(Object.keys(trace.stages).filter(stage => stage.startsWith('ADD_CATALOG_PRIMARY_')), [...stages]);
+    assert.equal(queries.length, 4); // Combined primary read, balance, variants and final snapshot.
+    assert.match(queries[0], /WITH inventory AS/);
+    assert.match(queries[0], /master_v3_articles[\s\S]*master_v3_prices/);
+    assert.ok(trace.stages.ADD_CATALOG_SNAPSHOT_AFTER_END !== undefined);
+
+    queries.length = 0;
+    assert.deepEqual(await catalog.get('P', undefined, true), legacy);
+    assert.equal(queries.length, 4);
+
+    const read = (articleId: string, tariffId: string) =>
+      f.adapter.masterSyncV3Store.readOperationalCatalogSale(runtime.version, articleId, tariffId);
+    const noPrice = await read('P', 'OTHER');
+    assert.ok(noPrice.article);
+    assert.equal(noPrice.price, undefined);
+    assert.equal((await read('missing', 'T')).article, null);
+    f.sql.exec("UPDATE master_v3_articles SET sellable = 0 WHERE article_id = 'P'");
+    assert.equal((await read('P', 'T')).article, null);
+    f.sql.exec("UPDATE master_v3_articles SET sellable = 1 WHERE article_id = 'P'");
+    f.bridge.query = async (...args) => {
+      const result = await query(...args);
+      if (args[0].includes('FROM master_v3_variants')) f.sql.exec("UPDATE master_v3_inventory_state SET cursor = 'changed'");
+      return result;
+    };
+    const stale = beginPosInteraction('ADD_TICKET_ITEM');
+    await assert.rejects(() => catalog.get('P', stale, true), /SYNC_V3_INVENTORY_NOT_READY/);
+    assert.ok(stale.stages.ADD_CATALOG_SUPPORT_END !== undefined);
+    assert.ok(stale.stages.ADD_CATALOG_SNAPSHOT_AFTER_END !== undefined);
+    const outdated = beginPosInteraction('ADD_TICKET_ITEM');
+    await assert.rejects(() => catalog.get('P', outdated, true), /SYNC_V3_INVENTORY_NOT_READY/);
+    assert.equal(outdated.stages.ADD_CATALOG_SUPPORT_START, undefined);
   } finally { f.sql.close(); }
 });
 
@@ -455,8 +517,6 @@ import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {LargeMasterSyncV3Runtime} from '../services/sync/LargeMasterSyncV3Runtime';
-import {LargeMasterSyncV3OperationalCatalog} from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 
 test('two distinct authoritative image chunks replace rendered references while stock baseline, pending ledger/outbox and old receipts stay unchanged',async()=>{
  const f=fixture();try{

@@ -111,6 +111,14 @@ export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedC
 /** Exact pending-session snapshot required to replace only obsolete staging, never active data. */
 export interface LargeMasterSyncV3StagingReplacement { syncId: string; syncVersion: number; status: string }
 
+export type V3CatalogSaleReadStage = 'QUEUE_START' | 'QUEUE_END' | 'SQLITE_START' | 'SQLITE_END';
+
+export interface V3CatalogSaleRead {
+  inventory: { version: number; cursor: string } | null;
+  article: Record<string, unknown> | null;
+  price: number | undefined;
+}
+
 export interface LargeMasterSyncV3Store {
   readBaselineReferenceInventory?(options: BaselineReferenceInventoryOptions): Promise<BaselineReferenceInventory>;
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
@@ -159,6 +167,8 @@ export interface LargeMasterSyncV3Store {
   getLocalInventoryDelta?(baseline: string, itemId: string, warehouseId: string): Promise<number>;
   assertCanRefresh?(): Promise<void>;
   getLocalInventoryDeltas?(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>>;
+  readOperationalCatalogSale?(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string, tariffId: string,
+    observe?: (stage: V3CatalogSaleReadStage) => void): Promise<V3CatalogSaleRead>;
   getOperationalSupports?(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string): Promise<{
     balances: Record<string, { qtyOnHand: number; qtyReserved: number; qtyCommitted: number }>;
     variants: Record<string, Record<string, unknown>[]>;

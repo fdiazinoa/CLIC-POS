@@ -1,4 +1,4 @@
-import { measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
+import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
 import { weightUnit } from '../../utils/scaleWeight';
 import { v3ArticleImages } from '../../utils/v3ArticlePresentation';
 import { v3RestaurantContract } from '../../utils/v3RestaurantContract';
@@ -115,7 +115,10 @@ export class LargeMasterSyncV3OperationalCatalog {
   }
 
   private async assertInventoryVersion(): Promise<void> {
-    const inventory = await this.ready.runtime.getInventorySnapshotVersion();
+    this.checkInventoryVersion(await this.ready.runtime.getInventorySnapshotVersion());
+  }
+
+  private checkInventoryVersion(inventory: { version: number; cursor: string } | null): void {
     if (!inventory || inventory.version !== this.ready.inventoryVersion
       || inventory.cursor !== this.ready.inventoryCursor) {
       throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
@@ -277,11 +280,20 @@ export class LargeMasterSyncV3OperationalCatalog {
       diagnostics, nextCursor: result.nextCursor };
   }
 
-  async get(articleId: string, trace?: PosInteractionTrace): Promise<V3OperationalProduct | null> {
+  async get(articleId: string, trace?: PosInteractionTrace, combinePrimaryReads = false): Promise<V3OperationalProduct | null> {
     const read = <T>(stage: 'ADD_CATALOG_SNAPSHOT_BEFORE' | 'ADD_CATALOG_SALE' | 'ADD_CATALOG_SNAPSHOT_AFTER', work: () => Promise<T>) =>
       trace ? measureInteractionStage(trace, `${stage}_START`, `${stage}_END`, work) : work();
-    await read('ADD_CATALOG_SNAPSHOT_BEFORE', () => this.assertInventoryVersion());
-    const sale = await read('ADD_CATALOG_SALE', () => this.saleCatalog.get(articleId));
+    const combined = combinePrimaryReads && this.ready.runtime.readOperationalCatalogSale(articleId.trim(), this.saleCatalog.tariffId,
+      trace ? stage => markInteractionStage(trace, `ADD_CATALOG_PRIMARY_${stage}`) : undefined);
+    let sale: V3SaleArticle | null;
+    if (combined) {
+      const { inventory, article, price } = await combined;
+      this.checkInventoryVersion(inventory);
+      sale = article ? this.saleCatalog.resolveArticle(article, price) : null;
+    } else {
+      await read('ADD_CATALOG_SNAPSHOT_BEFORE', () => this.assertInventoryVersion());
+      sale = await read('ADD_CATALOG_SALE', () => this.saleCatalog.get(articleId));
+    }
     const item = sale ? await this.adapt(sale, undefined, trace) : null;
     await read('ADD_CATALOG_SNAPSHOT_AFTER', () => this.assertInventoryVersion());
     return item;

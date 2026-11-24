@@ -123,6 +123,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     getLocalInventoryDelta: 'read',
     assertCanRefresh: 'read',
     getLocalInventoryDeltas: 'read',
+    readOperationalCatalogSale: 'read',
     getOperationalSupports: 'read',
     replaceInventorySnapshot: 'write',
     getInventorySnapshotVersion: 'read',
@@ -165,7 +166,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // Internal calls retain the raw target and explicit connection. Public observers wait for committed state.
             const mode=NATIVE_V3_METHOD_CONCURRENCY[key as keyof typeof NATIVE_V3_METHOD_CONCURRENCY];
             if(!mode) throw new Error('NATIVE_MASTER_STORE_METHOD_UNCLASSIFIED:'+String(key));
-            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(async()=>{
+            if (mode === 'write') return value.bind(target);
+            if (key === 'readOperationalCatalogSale') {
+                return (...args: Parameters<LargeMasterSyncV3SqliteStore['readOperationalCatalogSale']>) => {
+                    const observe = args[3];
+                    observe?.('QUEUE_START');
+                    return this.withWriteLock(() => {
+                        observe?.('QUEUE_END');
+                        return target.readOperationalCatalogSale(...args);
+                    });
+                };
+            }
+            return (...args:any[])=>this.withWriteLock(async()=>{
                 try { return await value.apply(target,args); }
                 catch(error) {
                     if(error instanceof BaselineReferenceConnectionUncertainError) this.financialConnectionError=error;

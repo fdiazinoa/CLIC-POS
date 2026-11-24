@@ -496,7 +496,7 @@ export class LargeMasterSyncV3OperationalSession {
       // A refund is authorized by the independently read original even when its catalog is still current.
       if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
-        return currentCatalog.get(line.id, trace);
+        return currentCatalog.get(line.id, trace, !!addTrace && !refund && !retained && !fiscalDeliveryOnly);
       }
       if (!refund) assertV3RetainedLine(line, retained);
       // Delivery of an already committed invoice is distinct from a new sale/refund checkout.

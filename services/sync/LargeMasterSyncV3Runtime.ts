@@ -3,6 +3,7 @@ import type {
   LargeMasterSyncV3RuntimeVersion,
   LargeMasterSyncV3Store,
   V3CatalogPageRequest,
+  V3CatalogSaleReadStage,
 } from './LargeMasterSyncV3Types';
 
 /**
@@ -45,6 +46,10 @@ export class LargeMasterSyncV3Runtime {
   getOperationalCategories(tariffId: string) {
     if (!this.store.getOperationalCategories) throw new Error('SYNC_V3_CATEGORY_READ_UNAVAILABLE');
     return this.store.getOperationalCategories(this.version, tariffId);
+  }
+
+  readOperationalCatalogSale(articleId: string, tariffId: string, observe?: (stage: V3CatalogSaleReadStage) => void) {
+    return this.store.readOperationalCatalogSale?.(this.version, articleId, tariffId, observe);
   }
 
   getOperationalArticle(articleId: string): Promise<Record<string, unknown> | null> {
