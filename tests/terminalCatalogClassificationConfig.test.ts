@@ -82,3 +82,42 @@ test('an unchanged classification refresh skips the SQLite config replacement, a
     fixture.db.close();
   }
 });
+
+test('native config replacement skips identical bytes while preserving omission and fiscal revocation', async () => {
+  const fixture = await nativeFixture();
+  try {
+    const config = await fixture.adapter.getCollection('config');
+    const storedConfig = () => fixture.db.prepare(
+      "SELECT data,updatedAt FROM documents WHERE collection_name='config' AND doc_id='current'",
+    ).get() as { data: string; updatedAt: string };
+    fixture.db.exec(`
+      CREATE TABLE config_update_audit (entry INTEGER);
+      CREATE TRIGGER config_update_audit AFTER UPDATE ON documents
+      WHEN NEW.collection_name='config' AND NEW.doc_id='current' BEGIN INSERT INTO config_update_audit VALUES(1); END;
+    `);
+    const auditCount = () => (fixture.db.prepare('SELECT count(*) AS n FROM config_update_audit').get() as { n: number }).n;
+    const original = storedConfig();
+    await fixture.adapter.saveCollection('config', config);
+    assert.deepEqual(storedConfig(), original);
+    assert.equal(auditCount(), 0);
+
+    fixture.db.exec(`INSERT INTO documents VALUES ('config','old','{"id":"old"}',1,'fixture');`);
+    await fixture.adapter.saveCollection('config', config);
+    assert.deepEqual(storedConfig(), original);
+    assert.deepEqual(fixture.documents('config').map(row => row.id), ['current']);
+    assert.equal(auditCount(), 0);
+
+    fixture.db.prepare(`INSERT INTO pos_offline_fiscal_allocations_v2
+      (authorization_id,scope_key,authority_json,binding_hash,server_offset_ms,max_local_ms,revoked)
+      VALUES ('authority','scope',?,'hash',0,0,0)`).run(JSON.stringify({ issuerRnc: '999999999' }));
+    await fixture.adapter.saveCollection('config', config);
+    assert.deepEqual(fixture.db.prepare("SELECT revoked FROM pos_offline_fiscal_allocations_v2 WHERE authorization_id='authority'").get(), { revoked: 1 });
+    assert.equal(auditCount(), 1, 'identical config still fires its revocation validation when necessary');
+
+    await fixture.adapter.saveCollection('config', { ...config, companyInfo: { rnc: '101010101' } });
+    assert.equal(JSON.parse(storedConfig().data).companyInfo.rnc, '101010101');
+    assert.equal(auditCount(), 2);
+  } finally {
+    fixture.db.close();
+  }
+});

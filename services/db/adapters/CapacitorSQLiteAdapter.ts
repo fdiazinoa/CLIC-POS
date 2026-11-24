@@ -1,4 +1,4 @@
-import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
+import { markSettingsReturnQa, measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
@@ -77,6 +77,14 @@ const DOCUMENT_UPSERT_SQL = `
     ON CONFLICT(collection_name, doc_id) DO UPDATE SET
         data = ${FINANCIAL_COUNTER_UPSERT_SQL.replace('__FINANCIAL_DOCUMENT__', ARTICLE_FORMAT_RETAINED_UPSERT_SQL.replace('__V3_FINANCIAL_DOCUMENT__',V3_FINANCIAL_RETAINED_UPSERT_SQL))},
         updatedAt = excluded.updatedAt
+`;
+
+// Identical canonical config need not be updated, except when its write can run a
+// fiscal authority or format guard. The replacement's deletes and UPSERT share one transaction.
+const CONFIG_REPLACE_UPSERT_SQL = `${DOCUMENT_UPSERT_SQL}
+    WHERE documents.data IS NOT excluded.data
+       OR json_extract(documents.data, '$.articleFormatEventId') IS NOT NULL
+       OR EXISTS (SELECT 1 FROM pos_offline_fiscal_allocations_v2 WHERE revoked = 0)
 `;
 
 type SQLiteBridgeModule = typeof import('@capacitor-community/sqlite');
@@ -1651,7 +1659,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const statements = [
             ...this.collectionReplacementStatements(collectionName,rows.map(row=>row.docId),now),
             ...rows.map((row) => ({
-                statement: DOCUMENT_UPSERT_SQL,
+                statement: collectionName === 'config' && row.docId === 'current'
+                    ? CONFIG_REPLACE_UPSERT_SQL : DOCUMENT_UPSERT_SQL,
                 values: [
                     collectionName,
                     row.docId,
@@ -1986,8 +1995,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if(nativeFinancial){await this.withNativeTransaction(async()=>{const proceed=await precondition?.();if(proceed!==false)for(const entry of executable)await db.run(entry.statement,entry.values,false);await postcondition?.();});return;}
 
         if (!precondition && !postcondition && typeof (db as any).executeSet === 'function') {
-            await measureSettingsReturnQa(`sqlite.lane.executeSet.${source}.${executable.length}`,
+            const result = await measureSettingsReturnQa(`sqlite.lane.executeSet.${source}.${executable.length}`,
                 () => db.executeSet(executable, true, 'no'));
+            if (source === 'replaceConfig' && result?.changes?.changes === 0) {
+                markSettingsReturnQa('sqlite.lane.replaceConfig.noChanges');
+            }
             return;
         }
 

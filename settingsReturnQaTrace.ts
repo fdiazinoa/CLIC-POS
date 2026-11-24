@@ -3,6 +3,7 @@ type Event = { name: string; startMs: number; durationMs?: number; ok?: boolean;
 function createTrace() {
   let run: { started: number; events: Event[]; queries: Map<string, number>; dropped: number } | undefined;
   return {
+    active: () => Boolean(run),
     start() { run = { started: performance.now(), events: [], queries: new Map(), dropped: 0 }; },
     stop() {
       const captured = run;
@@ -59,6 +60,13 @@ const trace = import.meta.env?.VITE_POS_SETTINGS_RETURN_TRACE === 'true' ? creat
 if (trace && typeof window !== 'undefined') Object.assign(window, {
   posSettingsReturnTrace: { start: trace.start, stop: trace.stop },
 });
+
+/** Export bundle coordinates only. Call this before the async persistence queue loses its caller. */
+export function captureSettingsReturnQaCaller(): string | undefined {
+  if (!trace?.active()) return;
+  const frames = (new Error().stack ?? '').match(/\b[\w.-]+\.js:\d+:\d+\b/g)?.slice(1, 6);
+  return frames?.length ? frames.join('|') : undefined;
+}
 
 export const markSettingsReturnQa = (name: string) => trace?.mark(name);
 export function measureSettingsReturnQa<T>(name: string, operation: () => Promise<T>, sql?: string, values?: unknown) {
