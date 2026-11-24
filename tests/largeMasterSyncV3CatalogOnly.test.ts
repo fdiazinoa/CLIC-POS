@@ -62,6 +62,7 @@ test('operational snapshot matches the separate reads before and after catalog r
       const active = await f.store.getActiveRuntimeVersion();
       assert.deepEqual(snapshot.active, active && { syncId: active.syncId, syncVersion: active.syncVersion });
       assert.deepEqual(snapshot.inventory, await f.store.getInventorySnapshotVersion(version));
+      assert.deepEqual(snapshot.inventoryAuthority, await f.store.getInventoryAuthority());
       assert.deepEqual(snapshot.owner, await f.store.getOperationalOwner());
     };
     const original = { syncId: 'S', syncVersion: 47, contractVersion: 2 };

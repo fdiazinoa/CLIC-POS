@@ -227,3 +227,47 @@ test('authority reads share one queue turn and wait for earlier config writes', 
     assert.deepEqual(rejected, ['QUEUE_START', 'QUEUE_END', 'CONFIG_START', 'CONFIG_END']);
   } finally { f.db.close(); }
 });
+
+test('ordinary traced add reuses the native inventory anchor but rejects a changed source on final recheck', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    const authority = {
+      binding: session.binding, syncId: id(60), syncVersion: 32, warehouseId: id(5), tariffId: id(6),
+      taxIncluded: false, inventoryVersion: 4, inventoryCursor: 'inventory-cursor',
+    };
+    const product = { id: id(7), name: 'Servicio QA', type: 'SERVICE', isInventoriable: false, taxable: false,
+      appliedTaxIds: [], price: 100, activeInWarehouses: [id(5)] };
+    session.catalogAfterAssert = async () => ({ get: async () => ({ product, authority }) });
+    const line = { ...product, v3SaleAuthority: authority, cartId: 'qa-line', quantity: 1 };
+    const store = f.adapter.masterSyncV3Store;
+    let separateReads = 0;
+    const initialInventory = await store.getInventoryAuthority();
+    store.getInventoryAuthority = async () => { separateReads++; return initialInventory; };
+    const readAuthority = f.adapter.readV3OperationalAuthority.bind(f.adapter);
+    let checks = 0;
+    let drift = false;
+    f.adapter.readV3OperationalAuthority = async (...args) => {
+      const snapshot = await readAuthority(...args);
+      if (++checks === 2 && drift && snapshot.inventoryAuthority) {
+        return { ...snapshot, inventoryAuthority: { ...snapshot.inventoryAuthority, syncId: id(999) } };
+      }
+      return snapshot;
+    };
+
+    const trace = { stages: {} };
+    await session.validate(f.env.config, [line], id(6), id(5), 'SALE', undefined, undefined, false, undefined, trace);
+    assert.equal(separateReads, 0);
+    assert.equal(checks, 2);
+
+    checks = 0;
+    drift = true;
+    await assert.rejects(session.validate(f.env.config, [line], id(6), id(5), 'SALE', undefined, undefined, false, undefined, trace),
+      /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+    assert.equal(separateReads, 0);
+    assert.equal(checks, 2);
+
+    await session.validate(f.env.config, [line], id(6), id(5));
+    assert.equal(separateReads, 1);
+  } finally { f.close(); }
+});
