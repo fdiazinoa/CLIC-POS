@@ -8355,6 +8355,9 @@ const AppContent: React.FC = () => {
       }
     };
 
+    // V3 loads catalog and inventory through its scoped native boundary.
+    const legacyProductsMissing = !LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && products.length === 0;
+
     // Poll for data every 5 seconds if we don't have any yet (for remote terminals)
     // Increased from 3s to give NetworkSyncService more time to complete
     const interval = setInterval(() => {
@@ -8362,13 +8365,13 @@ const AppContent: React.FC = () => {
         isDataLoaded
         && (
           users.length === 0
-          || products.length === 0
+          || legacyProductsMissing
           || warehouses.length === 0
           || internalSequences.length === 0
         )
       ) {
         refreshDataAfterSync();
-        if (isNativeAndroidRuntime() && (products.length === 0 || warehouses.length === 0)) {
+        if (isNativeAndroidRuntime() && (legacyProductsMissing || warehouses.length === 0)) {
           void hydrateNativeCatalogFromDb(
             { setProducts, setWarehouses, setProductStocks },
             'poll',
@@ -8378,7 +8381,7 @@ const AppContent: React.FC = () => {
     }, 5000); // Check every 5 seconds
 
     return () => clearInterval(interval);
-  }, [users.length, products.length, warehouses.length, isDataLoaded]);
+  }, [users.length, products.length, warehouses.length, internalSequences.length, isDataLoaded]);
 
   useEffect(() => {
     // Poll tables if in restaurant mode OR retail with tables enabled

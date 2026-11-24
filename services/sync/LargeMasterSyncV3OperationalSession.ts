@@ -1,3 +1,4 @@
+import { measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
 import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
 import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
@@ -412,8 +413,9 @@ export class LargeMasterSyncV3OperationalSession {
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
     intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false,
-    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void): Promise<V3RetainedContext | undefined> {
-    await this.assertCurrent();
+    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void, addTrace?: PosInteractionTrace): Promise<V3RetainedContext | undefined> {
+    if (addTrace) await measureInteractionStage(addTrace, 'ADD_AUTHORITY_START', 'ADD_AUTHORITY_END', () => this.assertCurrent());
+    else await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
     if(!fiscalDeliveryOnly&&lines.some(line=>line.inventoryPresentation!==undefined)){if(intent==='REFUND')throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');presentationProof=await this.presentationProof(config,lines);}
@@ -484,7 +486,10 @@ export class LargeMasterSyncV3OperationalSession {
       const stamp = line.v3SaleAuthority;
       const currentGeneration = stamp?.syncId === this.ready.runtime.version.syncId
         && stamp.syncVersion === this.ready.runtime.version.syncVersion;
-      const source = await sourceFor(line);
+      // Trace the first line's reads with the same route the validator already uses.
+      const source = addTrace && addTrace.stages.ADD_CATALOG_READ_START === undefined
+        ? await measureInteractionStage(addTrace, 'ADD_CATALOG_READ_START', 'ADD_CATALOG_READ_END', () => sourceFor(line))
+        : await sourceFor(line);
       const current = currentGeneration ? source : await currentCatalog.get(line.id);
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
@@ -502,11 +507,14 @@ export class LargeMasterSyncV3OperationalSession {
       if (source.product.type !== 'SERVICE' && source.product.isInventoriable === true
         && requiresV3SaleAvailability(intent, source.product.operationalFlags?.trackInventory === true,
         source.product.operationalFlags?.allowNegativeStock === true)) {
-        const stock=await this.withStock(source.product,warehouseId);
+        const stock = addTrace && addTrace.stages.ADD_STOCK_READ_START === undefined
+          ? await measureInteractionStage(addTrace, 'ADD_STOCK_READ_START', 'ADD_STOCK_READ_END', () => this.withStock(source.product, warehouseId))
+          : await this.withStock(source.product, warehouseId);
         if((demand.get(line.id) || 0)>stock.stock)throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
       }
     }
-    await this.assertCurrent();
+    if (addTrace) await measureInteractionStage(addTrace, 'ADD_RECHECK_START', 'ADD_RECHECK_END', () => this.assertCurrent());
+    else await this.assertCurrent();
     return retained;
   }
 

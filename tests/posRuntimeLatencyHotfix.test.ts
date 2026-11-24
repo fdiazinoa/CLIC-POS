@@ -208,3 +208,26 @@ test('settings interaction uses the same background-work pause as sales screens'
   assert.match(guard, /'SETTINGS_SYNC'/);
   assert.match(guard, /'POS'/);
 });
+
+test('the recovery poll ignores an intentionally empty V3 legacy catalog', () => {
+  const start = appSource.indexOf('const legacyProductsMissing =');
+  const end = appSource.indexOf('}, 5000);', start);
+  assert.ok(start >= 0 && end > start);
+  const createPoll = new Function(
+    'LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED', 'isDataLoaded', 'products', 'users', 'warehouses',
+    'internalSequences', 'isNativeAndroidRuntime', 'refreshDataAfterSync', 'hydrateNativeCatalogFromDb',
+    'setInterval', 'setProducts', 'setWarehouses', 'setProductStocks',
+    appSource.slice(start, end + '}, 5000);'.length),
+  );
+  const run = (v3: boolean, users: string[] = ['u'], warehouses: string[] = ['w'], isLoaded = true) => {
+    const calls: string[] = [];
+    createPoll(v3, isLoaded, [], users, warehouses, ['sequence'], () => true,
+      () => calls.push('refresh'), () => calls.push('native-catalog'), (tick: () => void) => tick());
+    return calls;
+  };
+  assert.deepEqual(run(true), []);
+  assert.deepEqual(run(false), ['refresh', 'native-catalog']);
+  assert.deepEqual(run(true, []), ['refresh']);
+  assert.deepEqual(run(true, ['u'], []), ['refresh', 'native-catalog']);
+  assert.deepEqual(run(false, ['u'], ['w'], false), []);
+});
