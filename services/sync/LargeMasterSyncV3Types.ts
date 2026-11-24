@@ -134,6 +134,7 @@ export interface LargeMasterSyncV3Store {
   readOperationalSnapshot?(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{
     active: LargeMasterSyncV3RuntimeVersion | null;
     inventory: { version: number; cursor: string } | null;
+    inventoryAuthority?: LargeMasterSyncV3InventoryAuthority | null;
     owner: { syncId: string; syncVersion: number; binding: string } | null;
   }>;
   getPragmaSnapshot(): Promise<Record<string, string | number | null>>;

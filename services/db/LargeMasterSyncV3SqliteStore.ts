@@ -42,7 +42,7 @@ export type LargeMasterSyncV3SqliteFaultHook = (
 
 type RecordObject = Record<string, unknown>;
 const CHUNK_SUB_BATCH_SIZE = 250;
-const INVENTORY_SNAPSHOT_SQL = `SELECT i.inventory_version, i.cursor
+const INVENTORY_SNAPSHOT_SQL = `SELECT i.sync_id, i.sync_version, i.inventory_version, i.cursor
       FROM master_v3_inventory_state i JOIN master_v3_state s ON s.singleton = 1
       WHERE i.singleton = 1
       AND (s.active_sync_id = i.sync_id AND s.active_version = i.sync_version
@@ -896,16 +896,20 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     requireOperationalVersion(runtime);
     const row = first(await this.connection().query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
       SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
-        o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor
+        o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor,
+        i.sync_id AS inventory_sync_id, i.sync_version AS inventory_sync_version
       FROM master_v3_state s
       LEFT JOIN master_v3_operational_owner o ON o.singleton = 1
       LEFT JOIN inventory i ON 1 = 1
       WHERE s.singleton = 1`, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
+    const inventory = row?.inventory_version != null
+      ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null;
     return {
       active: row?.active_sync_id && row.active_version != null
         ? { syncId: String(row.active_sync_id), syncVersion: Number(row.active_version) } : null,
-      inventory: row?.inventory_version != null
-        ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null,
+      inventory,
+      inventoryAuthority: inventory && row?.inventory_sync_id && row.inventory_sync_version != null
+        ? { ...inventory, syncId: String(row.inventory_sync_id), syncVersion: Number(row.inventory_sync_version), contractVersion: 2 } : null,
       owner: row?.owner_sync_id != null
         ? { syncId: String(row.owner_sync_id), syncVersion: Number(row.owner_version), binding: String(row.binding) } : null,
     };
