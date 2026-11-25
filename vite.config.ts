@@ -55,6 +55,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // Keep the entry's dynamic import helper independent of feature chunks.
+            if (id === '\0vite/preload-helper.js') return 'vite-preload';
             if (id.includes('node_modules')) {
               if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
                 return 'vendor-react';
