@@ -104,12 +104,12 @@ const certificateResponse = {
 test('the certificate is read explicitly in QA without minting or changing discovery', async () => {
  const ordinary = fixture({certificateResponse});
  try {
-  assert.equal(await ordinary.client.readLocalSigningCertificate('101010101'), null);
+  assert.equal(await ordinary.client.readLocalSigningCertificate('101010101', 1), null);
   assert.equal(ordinary.certificateCalls(), 0);
  } finally { ordinary.close(); }
  const qa = fixture({localSigningProbeEnabled: true, certificateResponse});
  try {
-  assert.equal(await qa.client.readLocalSigningCertificate('101010101'), certificateResponse.certificateSha256);
+  assert.equal(await qa.client.readLocalSigningCertificate('101010101', 1), certificateResponse.certificateSha256);
   assert.equal(qa.certificateCalls(), 1);
   assert.equal(qa.client.enabled(), false);
   assert.deepEqual(qa.counts(), {capCalls: 0, permitCalls: 0});
@@ -128,19 +128,28 @@ test('the certificate proof must match the current scope, issuer and certificati
  for (const response of invalid) {
   const f = fixture({localSigningProbeEnabled: true, certificateResponse: response});
   try {
-   await assert.rejects(f.client.readLocalSigningCertificate('101010101'), /CERTIFICATE_PROOF_INVALID/);
+   await assert.rejects(f.client.readLocalSigningCertificate('101010101', 1), /CERTIFICATE_PROOF_INVALID/);
   } finally { f.close(); }
  }
  const f = fixture({localSigningProbeEnabled: true, certificateResponse: {schemaVersion: 1, authorized: false}});
  try {
-  assert.equal(await f.client.readLocalSigningCertificate('101010101'), null);
+  assert.equal(await f.client.readLocalSigningCertificate('101010101', 1), null);
+ } finally { f.close(); }
+});
+
+test('accepts a TesteCF fingerprint only when TesteCF was selected', async () => {
+ const certificate = {...certificateResponse, environment: 0};
+ const f = fixture({localSigningProbeEnabled: true, certificateResponse: certificate});
+ try {
+  assert.equal(await f.client.readLocalSigningCertificate('101010101', 0), certificate.certificateSha256);
+  await assert.rejects(f.client.readLocalSigningCertificate('101010101', 1), /CERTIFICATE_PROOF_INVALID/);
  } finally { f.close(); }
 });
 
 test('a certificate response outstanding during a credential change cannot be used', async () => {
  const f = fixture({localSigningProbeEnabled: true, certificateResponse, holdCertificate: true});
  try {
-  const pending = f.client.readLocalSigningCertificate('101010101');
+  const pending = f.client.readLocalSigningCertificate('101010101', 1);
   assert.equal(f.certificateCalls(), 1);
   f.credentials = {...f.credentials, deviceToken: 'synthetic-rotated'};
   f.releaseCertificate();

@@ -5,6 +5,7 @@ import { verifyFiscalKeyChainQa } from '../services/fiscal/FiscalSigningKeyChain
 
 const terminalId = 'test-terminal';
 const issuer = '101010101';
+const environment = 0;
 const fingerprint = '0a'.repeat(32);
 
 function fixture() {
@@ -19,7 +20,11 @@ function fixture() {
     return {
         supported: () => true,
         readAuth: () => captureFiscalStatusBoundContext(() => identity, () => credentials),
-        readCertificate: async (value: string) => { assert.equal(value, issuer); return fingerprint; },
+        readCertificate: async (value: string, expectedEnvironment: 0 | 1) => {
+            assert.equal(value, issuer);
+            assert.equal(expectedEnvironment, environment);
+            return fingerprint;
+        },
         rotate: () => { credentials = { ...credentials, deviceToken: 'rotated-synthetic-token' }; },
     };
 }
@@ -27,9 +32,12 @@ function fixture() {
 test('checks the ERP fingerprint before and after the explicit Android selection', async () => {
     const deps = fixture();
     const events: string[] = [];
-    await verifyFiscalKeyChainQa(terminalId, issuer, {
+    await verifyFiscalKeyChainQa(terminalId, issuer, environment, {
         ...deps,
-        readCertificate: async value => { events.push('ERP'); return deps.readCertificate(value); },
+        readCertificate: async (value, expectedEnvironment) => {
+            events.push('ERP');
+            return deps.readCertificate(value, expectedEnvironment);
+        },
         native: { verify: async input => {
             assert.deepEqual(input, { certificateSha256: fingerprint });
             events.push('KeyChain');
@@ -41,21 +49,21 @@ test('checks the ERP fingerprint before and after the explicit Android selection
 
 test('skips the picker for an unsupported package, different terminal or missing approval', async () => {
     const deps = { ...fixture(), native: { verify: async () => assert.fail('Unexpected KeyChain selection') } };
-    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, { ...deps, supported: () => false }),
+    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, environment, { ...deps, supported: () => false }),
         /KEYCHAIN_UNAVAILABLE/);
-    await assert.rejects(verifyFiscalKeyChainQa('other', issuer, deps), /TERMINAL_CHANGED/);
-    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, { ...deps, readCertificate: async () => null }),
+    await assert.rejects(verifyFiscalKeyChainQa('other', issuer, environment, deps), /TERMINAL_CHANGED/);
+    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, environment, { ...deps, readCertificate: async () => null }),
         /CERTIFICATE_AUTHORITY_REQUIRED/);
 });
 
 test('rejects a rotated device token or a withdrawn approval during selection', async () => {
     const rotated = fixture();
-    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, {
+    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, environment, {
         ...rotated,
         native: { verify: async () => { rotated.rotate(); return { verified: true }; } },
     }), /SCOPE_CHANGED/);
     let reads = 0;
-    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, {
+    await assert.rejects(verifyFiscalKeyChainQa(terminalId, issuer, environment, {
         ...fixture(),
         readCertificate: async () => ++reads === 1 ? fingerprint : null,
         native: { verify: async () => ({ verified: true }) },

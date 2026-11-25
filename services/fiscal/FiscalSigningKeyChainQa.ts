@@ -15,14 +15,14 @@ export const canVerifyFiscalKeyChainQa = (): boolean =>
     && Capacitor.isPluginAvailable(pluginName);
 
 export async function verifyFiscalKeyChainQa(
-    terminalId: string, issuerRnc: string,
+    terminalId: string, issuerRnc: string, environment: 0 | 1,
     { supported = canVerifyFiscalKeyChainQa, readAuth = captureFiscalStatusBoundContext,
         readCertificate = fiscalWorkflowV2Client.readLocalSigningCertificate, native = keyChain } = {},
 ): Promise<void> {
     if (!supported()) throw Error('FISCAL_SIGNING_KEYCHAIN_UNAVAILABLE');
     const auth = readAuth();
     if (auth.descriptor.terminalId !== terminalId) throw Error('FISCAL_SIGNING_TERMINAL_CHANGED');
-    const certificateSha256 = await readCertificate(issuerRnc);
+    const certificateSha256 = await readCertificate(issuerRnc, environment);
     auth.assertCurrent();
     if (!certificateSha256) throw Error('FISCAL_SIGNING_CERTIFICATE_AUTHORITY_REQUIRED');
 
@@ -31,7 +31,7 @@ export async function verifyFiscalKeyChainQa(
     if (result?.verified !== true) throw Error('FISCAL_SIGNING_KEYCHAIN_UNAVAILABLE');
 
     // The operator may leave the system picker open while the approval changes.
-    const currentFingerprint = await readCertificate(issuerRnc);
+    const currentFingerprint = await readCertificate(issuerRnc, environment);
     auth.assertCurrent();
     if (currentFingerprint !== certificateSha256) throw Error('FISCAL_SIGNING_CERTIFICATE_AUTHORITY_CHANGED');
 }

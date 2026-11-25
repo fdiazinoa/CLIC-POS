@@ -101,8 +101,9 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  };
  return {
  /** Reads the certificate identity for Android KeyChain. This does not authorize an operation. */
- async readLocalSigningCertificate(expectedIssuerRnc: string): Promise<string | null> {
+ async readLocalSigningCertificate(expectedIssuerRnc: string, expectedEnvironment: 0 | 1): Promise<string | null> {
   if (!localSigningProbeEnabled) return null;
+  if (expectedEnvironment !== 0 && expectedEnvironment !== 1) fail('FISCAL_LOCAL_SIGNING_ENVIRONMENT_REQUIRED');
   if (!/^[0-9]{9}(?:[0-9]{2})?$/.test(expectedIssuerRnc)) fail('FISCAL_LOCAL_SIGNING_ISSUER_REQUIRED');
   const epoch = generation;
   const { data, auth } = await request(
@@ -111,7 +112,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   if (epoch !== generation) fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
   if (data?.schemaVersion === 1 && data.authorized === false && Object.keys(data).length === 2) return null;
   if (data?.schemaVersion !== 1 || data.authorized !== true || Object.keys(data).length !== 6
-   || data.environment !== 1 || data.issuerRnc !== expectedIssuerRnc
+   || data.environment !== expectedEnvironment || data.issuerRnc !== expectedIssuerRnc
    || !contexts(data.scope, scopeOf(auth.descriptor))
    || typeof data.certificateSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.certificateSha256)) {
    fail('FISCAL_LOCAL_SIGNING_CERTIFICATE_PROOF_INVALID');

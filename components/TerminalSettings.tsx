@@ -37,7 +37,7 @@ interface TerminalSettingsProps {
    onClose: () => void;
    warehouses?: Warehouse[];
    products?: Product[];
-   isAdminMode?: boolean;
+   canManageTerminal?: boolean;
    currentDeviceId?: string;
    users?: PosUser[];
 }
@@ -197,7 +197,7 @@ const NCF_LABELS: Record<NCFType, string> = {
    'B15': 'Gubernamentales'
 };
 
-const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId, users = [] }) => {
+const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], canManageTerminal = false, currentDeviceId, users = [] }) => {
    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
    const [checkingFiscalCertificate, setCheckingFiscalCertificate] = useState(false);
    const [terminals, setTerminals] = useState(() => dedupeConfiguredTerminals(config.terminals || []));
@@ -277,17 +277,19 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
 
-   const canCheckFiscalCertificate = Boolean(isAdminMode && canVerifyFiscalKeyChainQa() && currentDeviceId
+   const fiscalEnvironment = activeTerminal?.config.fiscal?.environment;
+   const canCheckFiscalCertificate = Boolean(canManageTerminal && canVerifyFiscalKeyChainQa() && currentDeviceId
       && activeTerminal?.config.currentDeviceId === currentDeviceId
-      && activeTerminal.config.fiscal?.environment === 1 && resolveTerminalErpIdentity(activeTerminal));
+      && (fiscalEnvironment === 0 || fiscalEnvironment === 1) && resolveTerminalErpIdentity(activeTerminal));
 
    const checkFiscalCertificate = async () => {
-      if (!activeTerminal || !canCheckFiscalCertificate || checkingFiscalCertificate) return;
+      if (!activeTerminal || !canCheckFiscalCertificate || checkingFiscalCertificate
+         || (fiscalEnvironment !== 0 && fiscalEnvironment !== 1)) return;
       const issuerRnc = String(activeTerminal.config.fiscal?.credentialKey || config.companyInfo?.rnc || '')
          .trim().replace(/[ -]/g, '');
       setCheckingFiscalCertificate(true);
       try {
-         await verifyFiscalKeyChainQa(resolveTerminalErpIdentity(activeTerminal), issuerRnc);
+         await verifyFiscalKeyChainQa(resolveTerminalErpIdentity(activeTerminal), issuerRnc, fiscalEnvironment);
          await clicAlert('Android comprobó que esta caja tiene acceso a la clave del certificado aprobado.', {
             title: 'Certificado verificado', tone: 'success',
          });
