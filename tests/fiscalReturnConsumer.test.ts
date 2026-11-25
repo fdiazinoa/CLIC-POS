@@ -268,6 +268,49 @@ test('lost prepare response repeats the byte-identical PREPARING command without
     assert.equal(f.prepareCalls[0], f.prepareCalls[1]);
     assert.equal(f.preparations.size, 1);
 });
+test('a broken HTTP 200 body recovers within the first confirm using the fiscal clock', async (t) => {
+    const f = await returnFixture(undefined, true, undefined, undefined, true, {
+        useHttpPreparation: true,
+        fiscalClockOffsetMs: 25_000,
+    });
+    t.after(() => f.cleanup());
+    f.setLosePrepare();
+    const tx = await f.run();
+    const attempt = (await f.adapter.fiscalReturnStore!.byTransaction(tx.id))!;
+    assert.equal(attempt.phase, 'COMMITTED');
+    assert.equal(tx.ncf, 'E340000000001');
+    assert.equal(f.prepareCalls.length, 2);
+    assert.equal(f.prepareCalls[0], f.prepareCalls[1]);
+    assert.equal(f.preparations.size, 1);
+    assert.ok(Date.parse(attempt.preparation!.preparedAt) <= Date.parse(attempt.localCommittedAt!));
+    assert.equal(f.documents('inventoryLedger').length, 1);
+    const events = f.db.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all();
+    assert.deepEqual(events.map((event: any) => event.event_type), ['SALES_CREDIT_NOTE_POSTED', 'PAYMENT_POSTED']);
+    assert.equal(f.documents('internalSequences').find(s => s.documentType === 'REFUND').nextNumber, 2);
+});
+test('prepare replay is bounded by the original signal and a structured rejection ends it', async () => {
+    const { createFiscalReturnTransport } = await import('../services/fiscal/FiscalReturnConsumer');
+    const auth = { base: 'https://erp.invalid/api/sync', headers: {}, assertCurrent() {} } as any;
+    const calls: RequestInit[] = [];
+    const transport = createFiscalReturnTransport(() => auth, async (_url, init) => {
+        calls.push(init!);
+        if (calls.length === 1) return new Response('<html>Gateway error</html>', { status: 502 });
+        return Response.json({ code: 'FISCAL_RETURN_IDEMPOTENCY_CONFLICT' }, { status: 409 });
+    });
+    const bytes = '{"operationId":"same"}';
+    await assert.rejects(transport.prepare(bytes), /FISCAL_RETURN_IDEMPOTENCY_CONFLICT/);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map(call => call.body), [bytes, bytes]);
+    assert.equal(calls[0].signal, calls[1].signal);
+
+    let rejected = 0;
+    const denied = createFiscalReturnTransport(() => auth, async () => {
+        rejected++;
+        return Response.json({ code: 'FISCAL_RETURN_STORAGE_NOT_READY' }, { status: 503 });
+    });
+    await assert.rejects(denied.prepare(bytes), /FISCAL_RETURN_STORAGE_NOT_READY/);
+    assert.equal(rejected, 1);
+});
 test('failure inside the native commit rolls back source, original, stock, events and counter; retry preserves localCommittedAt', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());

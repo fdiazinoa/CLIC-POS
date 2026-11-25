@@ -11,13 +11,14 @@ import { nativeFixture, id } from './articleFormatsNativeFixture';
 import { offlineFiscalAuthorityFromConfig } from '../services/fiscal/OfflineFiscalLeaseContext';
 import { allocationHash } from '../services/fiscal/OfflineFiscalAllocation';
 import { createFiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
-import { createFiscalReturnConsumer } from '../services/fiscal/FiscalReturnConsumer';
+import { createFiscalReturnConsumer, createFiscalReturnTransport } from '../services/fiscal/FiscalReturnConsumer';
 import { returnDigest, RETURN_PROFILE, RETURN_DIGEST_WIRE_SCHEME, returnJSON } from '../services/fiscal/FiscalReturnV1';
 import type { ReturnCommand, ReturnPreparation, ReturnCapability } from '../services/fiscal/FiscalReturnV1';
 import type { Transaction } from '../types';
 export async function returnFixture(database?: any, seed = true, server?: {
     preparations: Map<string, ReturnPreparation>;
-}, external?: any, consumerFinalE32 = false) {
+}, external?: any, consumerFinalE32 = false, options: { useHttpPreparation?: boolean; fiscalClockOffsetMs?: number } = {}) {
+    const serverNow = () => Date.now() + (options.fiscalClockOffsetMs ?? 0);
     const f = await nativeFixture(database, seed), scope = external?.scope || { tenantId: id(1), companyId: id(2), storeId: id(3), terminalId: id(4), deviceId: id(50) };
     const credentials = { ...scope, erpTenantId: scope.tenantId, erpTerminalId: scope.terminalId, deviceToken: 'synthetic', authStatus: 'BOUND' };
     const values = new Map([['clic_terminal_credentials_v1', JSON.stringify(credentials)], ['CLIC_POS_DEVICE_ID', scope.deviceId]]);
@@ -58,7 +59,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
         const local = await offlineFiscalAuthorityFromConfig(config, credentials, scope.deviceId);
         const unsigned: any = { contractVersion: 2, authorizationKind: 'OFFLINE_FISCAL_ALLOCATION_V2', authorizationId: id(102), scope, issuerRnc: '101010101', provider: 'MSELLER', environment: 0, issuedAt: new Date(Date.now() - 1000).toISOString(), bindingFingerprint: 'a'.repeat(64), allocations: [{ allocationId: allocation.id, fiscalRangeId: range.id, ncfType: 'E34', prefix: 'E34', padding: 10, start: 1, end: 1000000, rangeStart: 1, rangeEnd: 1000000, expiryDate: range.expiryDate }] };
         grant = external?.authority || { ...unsigned, authorityHash: await allocationHash(unsigned) };
-        await f.adapter.fiscalWorkflowStore.saveAllocation!(grant, local, new Date().toISOString());
+        await f.adapter.fiscalWorkflowStore.saveAllocation!(grant, local, new Date(serverNow()).toISOString());
     }
     else {
         config = await f.adapter.getDocument('config', 'current');
@@ -96,7 +97,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
             const round = (v: number) => Math.round(v * 100) / 100, net = round(8.47 * (prior + q)) - round(8.47 * prior), total = round(10 * q), tax = round(total - net);
             const l = { cartId: 'line', itemId: id(7), unitPrice: 10, quantity: q, originalQuantity: 1, stockDisposition: 'RESTOCK', netAmount: net, taxAmount: tax, totalAmount: total, discountAmount: 0, originalItem: original.items[0], sourceFiscalSnapshot: { appliedTaxIds: ['TX'] }, inventoryEntries: [{ itemId: id(7), quantity: q, unitCost: 35 }] };
             const snapshot = { schemaVersion: 1, profile: RETURN_PROFILE, loyaltyDisposition: 'NO_EFFECT_VERIFIED', loyaltyProofDigest: 'd'.repeat(64), originalReference: c.originalReference, originalDate: original.date, originalDisplayId: original.displayId, buyer: original.customerSnapshot, ...(consumerFinalE32 ? { consumerFinalE32: true } : {}), currency: 'DOP', exchangeRate: 1, lines: [l], netAmount: net, taxAmount: tax, vatAmount: tax, total, discountAmount: 0, sourceServiceChargeAmount: 0, paidAmount: total, pendingBalance: 0, sourceCustomerId: null, modificationCode: q === 1 ? 1 : 3, warehouseId: id(5), taxBreakdown: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: .18, amount: tax, taxableBase: net, total }], paymentCommands: c.payments.map(x => ({ ...x, method: 'CASH' })) };
-            p = { schemaVersion: 1, profile: RETURN_PROFILE, preparationId: crypto.randomUUID(), operationId: c.operationId, checkoutId: c.checkoutId, transactionId: c.transactionId, financialEventId: c.financialEventId, inventoryMovementIds: c.inventoryMovementIds, authorizationId: c.authorizationId, authorityHash: c.authorityHash, scope, environment: 0, issuerRnc: '101010101', originalReference: c.originalReference, originalProofDigest: 'e'.repeat(64), returnSnapshot: snapshot, returnSnapshotDigest: await returnDigest(snapshot), reservationState: 'PREPARED', preparedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600000).toISOString() };
+            p = { schemaVersion: 1, profile: RETURN_PROFILE, preparationId: crypto.randomUUID(), operationId: c.operationId, checkoutId: c.checkoutId, transactionId: c.transactionId, financialEventId: c.financialEventId, inventoryMovementIds: c.inventoryMovementIds, authorizationId: c.authorizationId, authorityHash: c.authorityHash, scope, environment: 0, issuerRnc: '101010101', originalReference: c.originalReference, originalProofDigest: 'e'.repeat(64), returnSnapshot: snapshot, returnSnapshotDigest: await returnDigest(snapshot), reservationState: 'PREPARED', preparedAt: new Date(serverNow()).toISOString(), expiresAt: new Date(serverNow() + 600000).toISOString() };
             p.returnSnapshotDigestScheme = RETURN_DIGEST_WIRE_SCHEME;
             p.returnSnapshotDigestInput = returnJSON({ schemaVersion: 1, source: 'ERP_POS_FISCAL_RETURN_V1', value: snapshot });
             preparations.set(c.operationId, p);
@@ -153,8 +154,19 @@ export async function returnFixture(database?: any, seed = true, server?: {
         return result.transaction;
     };
     let consultOriginal = async (_id: string, _signal?: AbortSignal, _timeoutMs?: number) => parent;
+    const httpPreparation = createFiscalReturnTransport(() => ({ base: 'https://erp.invalid/api/sync', descriptor: scope, headers: {}, assertCurrent() {} } as any),
+        async (_url, init) => {
+            try {
+                return Response.json(await prepare(String(init?.body)));
+            } catch (error) {
+                if ((error as Error).message !== 'FISCAL_RETURN_UNAVAILABLE') throw error;
+                return new Response(new ReadableStream({
+                    start(controller) { controller.error(new TypeError('Synthetic interruption while reading HTTP 200')); },
+                }), { status: 200 });
+            }
+        }).prepare;
     const client = createFiscalReturnConsumer({ adapter: f.adapter, transport: { context: () => ({ descriptor: scope, assertCurrent: () => { } } as any), capability: async () => { if (offline)
-                throw Error('FISCAL_RETURN_UNAVAILABLE'); return capability; }, prepare }, workflow: { ...localClient, consult: (id, signal, timeoutMs) => consultOriginal(id, signal, timeoutMs) }, readOriginal: async () => (await f.adapter.getDocument<Transaction>('transactions', original.id))!,
+                throw Error('FISCAL_RETURN_UNAVAILABLE'); return capability; }, prepare: options.useHttpPreparation ? httpPreparation : prepare }, workflow: { ...localClient, consult: (id, signal, timeoutMs) => consultOriginal(id, signal, timeoutMs) }, readOriginal: async () => (await f.adapter.getDocument<Transaction>('transactions', original.id))!,
         commit: commitSource });
     const run = (q = 1) => client.process(original, [{ ...original.items[0], quantity: q }], new Map([['line', 'SELLABLE']]), 'Synthetic return', id(10), { id: 'user', name: 'User' });
     return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, setConsult: (handler: typeof consultOriginal) => { consultOriginal = handler; }, commitSource, preparations, prepareCalls, setCommitTransform:(transform:(tx:Transaction)=>Transaction)=>commitTransform=transform, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };

@@ -5,31 +5,66 @@ import type { NativeFiscalReturnStore } from '../db/NativeFiscalReturnStore';
 import { fiscalWorkflowScopeKey } from './FiscalWorkflowV2Types';
 import type { FiscalWorkflowCheckoutV2, FiscalWorkflowStateV2 } from './FiscalWorkflowV2Types';
 import { captureFiscalStatusBoundContext } from './FiscalBoundContext';
-import { assertReturnAdmission, assertReturnSettlementCapability, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
+import { assertReturnAdmission, assertReturnSettlementCapability, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnFiscalTime, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
+
+class UncertainReturnPreparationResponse extends Error {
+    constructor(cause?: unknown) {
+        super('FISCAL_RETURN_UNAVAILABLE', { cause });
+    }
+}
+
+const transientPreparationStatus = (status: number) => [408, 429, 500, 502, 503, 504].includes(status);
+
 export function createFiscalReturnTransport(readAuth = captureFiscalStatusBoundContext, fetcher: typeof fetch = fetch) {
     const returnPath = 'fiscal/workflow/v2/return/';
     const request = async (path: string, bytes?: string, root = returnPath) => {
         const auth = readAuth(), controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
-        try {
+        const isPreparation = root === returnPath && path === 'prepare';
+        // Use the QA preparation budget for both attempts. Other requests keep their existing timeout.
+        const timer = setTimeout(() => controller.abort(), isPreparation ? 30_000 : 10_000);
+        const attempt = async () => {
             auth.assertCurrent();
-            const response = await fetcher(`${auth.base}/${root}${path}`, { method: bytes === undefined ? 'GET' : 'POST', headers: { ...auth.headers, ...(root === returnPath && (path === 'capability' || path === 'prepare') ? { 'X-POS-Capabilities': 'fiscalReturnConsumerFinalE32' } : {}), ...(bytes === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: bytes, signal: controller.signal, credentials: 'omit', redirect: 'error', cache: 'no-store' });
-            returnNeed(Number(response.headers.get('content-length') || 0) <= 2000000, 'FISCAL_RETURN_RESPONSE_INVALID');
-            const text = await response.text();
+            let response: Response;
+            let text: string;
+            try {
+                response = await fetcher(`${auth.base}/${root}${path}`, { method: bytes === undefined ? 'GET' : 'POST', headers: { ...auth.headers, ...(root === returnPath && (path === 'capability' || path === 'prepare') ? { 'X-POS-Capabilities': 'fiscalReturnConsumerFinalE32' } : {}), ...(bytes === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: bytes, signal: controller.signal, credentials: 'omit', redirect: 'error', cache: 'no-store' });
+                returnNeed(Number(response.headers.get('content-length') || 0) <= 2000000, 'FISCAL_RETURN_RESPONSE_INVALID');
+                text = await response.text();
+            } catch (error) {
+                if (isPreparation && !controller.signal.aborted &&
+                    ['TypeError', 'NetworkError', 'TimeoutError', 'AbortError'].includes((error as Error)?.name))
+                    throw new UncertainReturnPreparationResponse(error);
+                throw error;
+            }
             returnNeed(text.length <= 1000000, 'FISCAL_RETURN_RESPONSE_INVALID');
             auth.assertCurrent();
             let data: any;
             try {
                 data = JSON.parse(text);
             }
-            catch {
+            catch (error) {
+                if (isPreparation && (response.ok || transientPreparationStatus(response.status)))
+                    throw new UncertainReturnPreparationResponse(error);
                 throw Error('FISCAL_RETURN_UNAVAILABLE');
             }
-            if (!response.ok)
-                throw Error(typeof data?.code === 'string' && /^FISCAL_RETURN_[A-Z0-9_]+$/.test(data.code) ? data.code : 'FISCAL_RETURN_UNAVAILABLE');
+            if (!response.ok) {
+                if (typeof data?.code === 'string' && /^FISCAL_RETURN_[A-Z0-9_]+$/.test(data.code))
+                    throw Error(data.code);
+                if (isPreparation && transientPreparationStatus(response.status))
+                    throw new UncertainReturnPreparationResponse();
+                throw Error('FISCAL_RETURN_UNAVAILABLE');
+            }
             return data;
+        };
+        try {
+            return await attempt();
+        } catch (error) {
+            if (!(error instanceof UncertainReturnPreparationResponse) || controller.signal.aborted)
+                throw error;
+            // Reuse the sealed command and the original deadline. The ERP replays its stored preparation.
+            return await attempt();
         }
         finally {
             clearTimeout(timer);
@@ -64,7 +99,7 @@ interface ConsumerPorts {
     workflow: {
         consult: (id: string, signal?: AbortSignal, timeoutMs?: number) => Promise<FiscalWorkflowStateV2>;
         reserveReturnCheckout: (cart: string, operation: string) => Promise<FiscalWorkflowCheckoutV2>;
-        allocationDraft: (checkout: FiscalWorkflowCheckoutV2) => Promise<any>;
+        allocationDraft: (checkout: FiscalWorkflowCheckoutV2) => Promise<{ fiscalEnvironment: number; fiscalTimeMs: number }>;
         recordPayment: (checkout: FiscalWorkflowCheckoutV2, paymentId: string) => Promise<void>;
     };
     readOriginal?: (source: Transaction) => Promise<Transaction>;
@@ -74,7 +109,6 @@ interface ConsumerPorts {
 const RETURN_ORIGINAL_STATUS_TIMEOUT_MS = 20_000;
 const inflight = new Map<string, Promise<Transaction>>();
 export function createFiscalReturnConsumer(ports: ConsumerPorts) {
-    const now = ports.now || Date.now;
     return { async process(original: Transaction, items: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string, seriesId: string, user: {
             id: string;
             name: string;
@@ -191,16 +225,19 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 // Historical prepare replay after revocation/flag OFF never authorizes a fresh financial commit.
                 c = await ports.transport.capability();
                 auth.assertCurrent();
-                assertReturnAdmission(c, scope, a.preparation, now());
                 if(selection)assertReturnSettlementCapability(c,scope);
                 const draft = await ports.workflow.allocationDraft(a.checkout!);
+                auth.assertCurrent();
                 returnNeed(draft.fiscalEnvironment === a.preparation!.environment, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
+                const fiscalTime = returnFiscalTime(a.preparation!, ports.now?.() ?? draft.fiscalTimeMs);
+                assertReturnAdmission(c, scope, a.preparation, fiscalTime);
+                const checkedAt = new Date(Date.now()).toISOString();
                 if (!a.localCommittedAt) {
-                    const localCommittedAt = new Date(now()).toISOString();
-                    a = await store!.save(a, { ...a, localCommittedAt, source: buildReturnSource(a, original, seriesId, user), phase: 'SEALED', admission: { capability: c, checkedAt: localCommittedAt } });
+                    const localCommittedAt = new Date(fiscalTime).toISOString();
+                    a = await store!.save(a, { ...a, localCommittedAt, source: buildReturnSource(a, original, seriesId, user), phase: 'SEALED', admission: { capability: c, checkedAt } });
                 }
                 else
-                    a = await store!.save(a, { ...a, admission: { capability: c, checkedAt: new Date(now()).toISOString() } });
+                    a = await store!.save(a, { ...a, admission: { capability: c, checkedAt } });
                 await store!.fence(a.id);
                 const source = await ports.commit(a.source!, a);
                 return source;
