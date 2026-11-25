@@ -3275,7 +3275,8 @@ const AppContent: React.FC = () => {
     const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id');
     const options = { activeTerminalId, bindingTerminalId, bindingLocalTerminalId };
     const sanitized = clearDuplicateDeviceAssignments(config, deviceId, options);
-    if (sanitized.changed && dbAdapter.saveConfigIfUnchanged) {
+    const storedConfigId = (config as BusinessConfig & { id?: string }).id;
+    if (sanitized.changed && dbAdapter.saveConfigIfUnchanged && (!storedConfigId || storedConfigId === 'current')) {
       let current = true;
       const repair = (stored: BusinessConfig) => clearDuplicateDeviceAssignments(stored, deviceId, options);
       void (async () => {
@@ -3283,7 +3284,12 @@ const AppContent: React.FC = () => {
           const repaired = await persistTerminalAssignmentRepair(dbAdapter, repair, () => current);
           const accepted = repaired ?? (current ? await dbAdapter.getDocument<BusinessConfig>('config', 'current') : null);
           if (accepted && current && !repair(accepted).changed) {
-            setConfig(previous => previous === config ? accepted : previous);
+            setConfig(previous => {
+              if (previous !== config) return previous;
+              const auditLogs = new Map((previous.auditLogs || []).map(log => [log.id, log]));
+              for (const log of accepted.auditLogs || []) auditLogs.set(log.id, log);
+              return auditLogs.size ? { ...accepted, auditLogs: [...auditLogs.values()] } : accepted;
+            });
           }
         } catch (error) {
           console.warn('Failed to persist duplicate terminal assignment cleanup', error);
