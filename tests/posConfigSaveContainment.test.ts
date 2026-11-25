@@ -156,7 +156,7 @@ test('IndexedDB CAS updates only the config seen by the caller', async () => {
         await adapter.saveDocument('config', erp);
         assert.equal(await adapter.saveConfigIfUnchanged(read, { ...read, terminals: [] }), false);
         assert.deepEqual(await adapter.getDocument('config', 'current'), erp);
-        const repaired = { ...erp, terminals: [{ id: 'terminal' }] } as BusinessConfig;
+        const repaired = { ...erp, publication: 'repaired' };
         assert.equal(await adapter.saveConfigIfUnchanged(erp, repaired), true);
         assert.deepEqual(await adapter.getDocument('config', 'current'), repaired);
     } finally {
