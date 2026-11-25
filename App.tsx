@@ -1,4 +1,5 @@
 import { beginSettingsReturnQa } from './settingsReturnQaTrace';
+import { repairStoredConfig } from './services/identity/configRepairPersistence';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -3359,9 +3360,27 @@ const AppContent: React.FC = () => {
         console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
       }
     }
-    void db.save('config', nextConfig).catch((error) => {
-      console.warn('Failed to persist duplicate terminal assignment cleanup', error);
-    });
+    // Only persist when the stored document actually changes. Local-key/profile/credential
+    // repairs do not need a replaceConfig of the whole document (the ~585 ms catalog block).
+    // When it does change, repair the latest stored copy instead of the stale React snapshot.
+    if (sanitized.changed) {
+      void (async () => {
+        try {
+          const stored = await db.getDocument('config', 'current') as BusinessConfig | null;
+          const repaired = repairStoredConfig(stored, nextConfig, deviceId, {
+            activeTerminalId,
+            bindingTerminalId,
+            bindingLocalTerminalId,
+          }, clearDuplicateDeviceAssignments);
+          if (repaired) {
+            await db.save('config', repaired);
+            setConfig(repaired);
+          }
+        } catch (error) {
+          console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+        }
+      })();
+    }
   }, [config, deviceId]);
 
   // Helper: Get current device role (raw value, no fallback)
@@ -9995,6 +10014,11 @@ const AppContent: React.FC = () => {
     alert('Secuencia fiscal local alineada correctamente.');
   };
 
+  // Audit mirrors (supervisor authorizations) update the in-memory config; the durable
+  // source is posAuditEvents. Persisting the whole config here rebuilt/replaceConfig-blocked
+  // the catalog for ~633 ms per authorization.
+  const handleAuditLogsMirror = (newConfig: BusinessConfig) => { setConfig(newConfig); };
+
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log
     const tenantCompanyConfig = normalizeCompanyInfoFromTenantIdentity(newConfig);
@@ -14555,6 +14579,7 @@ const AppContent: React.FC = () => {
             onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={handleAddCustomer}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
             onUpdateActiveTableGuests={handleUpdateActiveTableGuests}
@@ -14822,6 +14847,7 @@ const AppContent: React.FC = () => {
             onInitialSelectionHandled={() => setScanTargetTicketId(null)}
             activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onClose={() => {
               setScanTargetTicketId(null); // Clear selection on close
               const returnView = historyReturnViewRef.current;

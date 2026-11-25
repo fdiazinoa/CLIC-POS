@@ -343,6 +343,7 @@ export interface POSInterfaceProps {
    onTransactionComplete: (txn: Transaction) => void | Promise<void>;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
+   onAuditLogsMirror?: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
    activeTable?: Table | null;
    accountItemActionRequest?: AccountItemActionRequest | null;
@@ -1312,6 +1313,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onTransactionComplete,
    onAddCustomer,
    onUpdateConfig,
+   onAuditLogsMirror,
    activeTerminalId,
    activeTable,
    accountItemActionRequest,
@@ -2956,7 +2958,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       config,
       currentUser,
       roles,
-      onUpdateConfig
+      onUpdateConfig,
+      onAuditLogsMirror
    });
    const hasSubtotalizedCart = useMemo(
       () => cart.some(item => Boolean(item.subtotalizedAt)),

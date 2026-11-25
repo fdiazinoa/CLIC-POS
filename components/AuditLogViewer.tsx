@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { dbAdapter } from '../services/db';
+import { POS_AUDIT_COLLECTION, type PosAuditQueueItem } from '../services/audit/PosOperationalAudit';
 import { BusinessConfig, AuditLogEntry, User } from '../types';
 import { ShieldAlert, Search, Calendar, User as UserIcon, Terminal } from 'lucide-react';
 
@@ -9,7 +11,19 @@ interface AuditLogViewerProps {
 
 const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
     const [searchTerm, setSearchTerm] = useState('');
-    const logs = config.auditLogs || [];
+    // The durable source is posAuditEvents; config.auditLogs only holds recovery mirrors.
+    const [durableLogs, setDurableLogs] = useState<AuditLogEntry[]>([]);
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            try {
+                const rows = await dbAdapter.getCollection(POS_AUDIT_COLLECTION) as PosAuditQueueItem[];
+                if (alive) setDurableLogs((rows || []).map(row => row.event).filter(Boolean));
+            } catch { /* Keep the config mirror when the queue is unavailable. */ }
+        })();
+        return () => { alive = false; };
+    }, [config.auditLogs?.length]);
+    const logs = [...new Map([...(config.auditLogs || []), ...durableLogs].map(log => [log.id, log])).values()];
 
     const filteredLogs = logs.filter(log => {
         const cashierName = users.find(u => u.id === log.cashierId)?.name || log.cashierId;
