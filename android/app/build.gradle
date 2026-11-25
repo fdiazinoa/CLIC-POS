@@ -149,6 +149,7 @@ dependencies {
     implementation "androidx.webkit:webkit:1.12.1"
     implementation "com.machinezoo.sourceafis:sourceafis:3.18.1"
     implementation project(':capacitor-android')
+    debugImplementation 'org.apache.santuario:xmlsec:2.3.5'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
