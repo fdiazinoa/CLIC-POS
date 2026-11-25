@@ -111,6 +111,7 @@ import {
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 import { markSettingsReturnQa, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
+import { terminalConfigChangedSections } from '../../utils/terminalConfigPersistence';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 import { preserveLocalCatalog } from './preserveLocalCatalog';
 import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLocalCatalog';
@@ -4069,22 +4070,29 @@ class SyncManager {
         });
 
         const localProducts = v3Authority ? [] : ((await db.get('products')) as Product[]) || [];
-        const nextConfig = v3Authority ? applied.config : this.reconcileCatalogProductIds(applied.config, localProducts);
+        const projectedConfig = v3Authority ? applied.config : this.reconcileCatalogProductIds(applied.config, localProducts);
         if (v3Authority) {
             // Terminal identity, documents and permissions still come from the
             // existing config contract, but its tariff/tax copies are not V3.
-            nextConfig.tariffs = configForTerminalSnapshot.tariffs;
-            nextConfig.taxes = configForTerminalSnapshot.taxes;
+            projectedConfig.tariffs = configForTerminalSnapshot.tariffs;
+            projectedConfig.taxes = configForTerminalSnapshot.taxes;
         }
+        const changedSections = terminalConfigChangedSections(
+            this.sanitizeConfig(configForTerminalSnapshot), this.sanitizeConfig(projectedConfig),
+        );
+        const changed = changedSections.length > 0;
+        // Reuse the stored representation for an equivalent refresh so runtime
+        // authority fingerprints and SQLite retain the same object key order.
+        const nextConfig = changed ? projectedConfig : configForTerminalSnapshot;
         const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
-        const changed =
-            JSON.stringify(this.sanitizeConfig(configForTerminalSnapshot)) !==
-            JSON.stringify(this.sanitizeConfig(nextConfig));
 
         if (options?.persist !== false && changed) {
             if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+            for (const section of changedSections) markSettingsReturnQa(`sync.config.terminalResolved.changed.${section}`);
             await measureSettingsReturnQa('sync.config.terminalResolved.replace', () => db.save('config', nextConfig));
+        } else if (!changed) {
+            markSettingsReturnQa('sync.config.terminalResolved.unchanged');
         }
 
         if (nextRuntimeWarehouses.length > 0) {
