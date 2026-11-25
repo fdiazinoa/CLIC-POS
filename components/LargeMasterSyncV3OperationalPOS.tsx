@@ -7,6 +7,7 @@ import {restoreV3ReservationReference,expireV3Reservation} from '../services/syn
 import { claimV3DirectTicket, readV3DirectWaitingTickets, updateV3DirectTicket } from '../services/sync/LargeMasterSyncV3DirectTicketSource';
 import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
+import { isLargeMasterSyncV3PaymentHeld, waitForLargeMasterSyncV3Payment } from '../services/sync/LargeMasterSyncV3OperationGate';
 import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -88,8 +89,19 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     setCatalogRevision(previous => previous + 1);
   }, true), []);
   useEffect(() => {
+    const controller = new AbortController();
+    let renewalPending = false;
     const renew = (event?: Event) => {
       if (latestPresentation.current.suspended || !session?.needsSessionRenewal()) return;
+      if (isLargeMasterSyncV3PaymentHeld()) {
+        if (renewalPending) return;
+        renewalPending = true;
+        void waitForLargeMasterSyncV3Payment(controller.signal).then(() => {
+          renewalPending = false;
+          if (!controller.signal.aborted) renew(event);
+        }).catch(() => undefined);
+        return;
+      }
       markSettingsReturnQa(event ? 'v3.trigger.terminalSessionRenewed' : 'v3.trigger.renewalDetected');
       ++contextSequence.current;
       ++querySequence.current;
@@ -99,7 +111,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     window.addEventListener(TERMINAL_SESSION_RENEWED_EVENT, renew);
     // A renewal can finish while the initial catalog is still opening.
     renew();
-    return () => window.removeEventListener(TERMINAL_SESSION_RENEWED_EVENT, renew);
+    return () => {
+      controller.abort();
+      window.removeEventListener(TERMINAL_SESSION_RENEWED_EVENT, renew);
+    };
   }, [session]);
   const latestProps = useRef(props);
   latestProps.current = props;

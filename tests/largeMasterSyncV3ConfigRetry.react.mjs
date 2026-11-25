@@ -24,10 +24,11 @@ const mocks={
 };
 const built=await build({stdin:{contents:`
  export { default } from './components/LargeMasterSyncV3OperationalPOS';
+ export { setLargeMasterSyncV3CriticalOperation } from './services/sync/LargeMasterSyncV3OperationGate';
  export { v3ErpStockDisplay, v3ErpStockDisplayScope } from './services/sync/LargeMasterSyncV3ErpStockDisplay';
 `,resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',jsx:'transform',tsconfigRaw:{compilerOptions:{jsx:'react'}},plugins:[{name:'config-retry-react-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path]}));}}]});
 const loaded={exports:{}};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);
-const { default:Component, v3ErpStockDisplay, v3ErpStockDisplayScope }=loaded.exports;
+const { default:Component, setLargeMasterSyncV3CriticalOperation, v3ErpStockDisplay, v3ErpStockDisplayScope }=loaded.exports;
 const settle=()=>act(async()=>{for(let n=0;n<30;n++)await Promise.resolve();});
 async function fixture({initialHold,emptyCart=false}={}){
  Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,bindingVersion:1,runtimeVersion:1,resumeGuard:undefined,projects:[],categoryReads:[]});
@@ -72,6 +73,22 @@ try{
   await act(async()=>renew());await settle();assert.equal(env.requests.length,2);
   f.unchanged(retained);
   results.push('session renewal reopens the POS authority without changing the ticket');
+ }finally{await f.close();}}
+ {const f=await fixture();try{
+  const retained=env.child.retained, boundary=env.child.props.v3Operational;
+  setLargeMasterSyncV3CriticalOperation('PAYMENT',true);
+  try {
+   env.bindingVersion++;
+   await act(async()=>{window.dispatchEvent(new Event('terminalSessionRenewed'));});await settle();
+   assert.equal(env.requests.length,1);
+   assert.strictEqual(env.child.props.v3Operational,boundary);
+   await boundary.validate(f.lines);
+  } finally {await act(async()=>setLargeMasterSyncV3CriticalOperation('PAYMENT',false));}
+  await settle();
+  assert.equal(env.requests.length,2);
+  await assert.rejects(boundary.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  f.unchanged(retained);
+  results.push('credential renewal waits for the payment boundary and retains the ticket');
  }finally{await f.close();}}
  // New props before rejection: replacement succeeds; the retired catch cannot overwrite it.
  {const f=await fixture();try{
