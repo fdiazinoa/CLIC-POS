@@ -602,7 +602,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onClose={() => setCurrentView('HOME')}
             products={props.products}
             warehouses={props.warehouses}
-            isAdminMode={props.isAdminMode}
+            canManageTerminal={hasPermission('SETTINGS_HARDWARE')}
             currentDeviceId={props.currentDeviceId}
           />
         );
