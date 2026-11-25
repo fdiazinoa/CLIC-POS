@@ -9,7 +9,10 @@ import static org.junit.Assert.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 
@@ -75,6 +78,20 @@ public class FiscalXmlSignerQaTest {
         assertArrayEquals(result.ecf, signer.signConsumerSale(invoice, summary, ISSUER, SALE).ecf);
         signedSummary.getElementsByTagName("MontoTotal").item(0).setTextContent("193.00");
         assertFalse(verify(signedSummary));
+    }
+
+    @Test
+    public void localReadinessChecksFingerprintAndKeyPossession() throws Exception {
+        byte[] fingerprint = MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
+        FiscalXmlSignerQa.verifyCertificateFingerprint(certificate, fingerprint);
+        new FiscalXmlSignerQa(key, certificate).verifyKeyAccess();
+
+        fingerprint[0] ^= 1;
+        assertThrows(IllegalStateException.class,
+                () -> FiscalXmlSignerQa.verifyCertificateFingerprint(certificate, fingerprint));
+        var otherKey = KeyPairGenerator.getInstance("RSA").generateKeyPair().getPrivate();
+        assertThrows(GeneralSecurityException.class,
+                () -> new FiscalXmlSignerQa(otherKey, certificate).verifyKeyAccess());
     }
 
     @Test

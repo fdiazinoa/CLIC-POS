@@ -5,8 +5,12 @@ import android.security.KeyChain;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
+import java.security.SecureRandom;
+import java.security.Signature;
 import java.security.cert.X509Certificate;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -51,15 +55,40 @@ final class FiscalXmlSignerQa {
             throw new IllegalStateException("FISCAL_SIGNING_CERTIFICATE_UNAVAILABLE");
         }
         X509Certificate certificate = chain[0];
+        verifyCertificateFingerprint(certificate, approvedFingerprint);
+
+        PrivateKey privateKey = KeyChain.getPrivateKey(application, alias);
+        if (privateKey == null) throw new IllegalStateException("FISCAL_SIGNING_KEY_UNAVAILABLE");
+        return new FiscalXmlSignerQa(privateKey, certificate);
+    }
+
+    static void verifyCertificateFingerprint(X509Certificate certificate, byte[] approvedFingerprint)
+            throws GeneralSecurityException {
         certificate.checkValidity();
         byte[] actual = MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
         if (!MessageDigest.isEqual(approvedFingerprint, actual)) {
             throw new IllegalStateException("FISCAL_SIGNING_CERTIFICATE_FINGERPRINT_MISMATCH");
         }
+    }
 
-        PrivateKey privateKey = KeyChain.getPrivateKey(application, alias);
-        if (privateKey == null) throw new IllegalStateException("FISCAL_SIGNING_KEY_UNAVAILABLE");
-        return new FiscalXmlSignerQa(privateKey, certificate);
+    /** A local possession proof over a random, non-document challenge. No signature is returned. */
+    void verifyKeyAccess() throws GeneralSecurityException {
+        byte[] purpose = "CLIC-POS QA KeyChain possession".getBytes(StandardCharsets.US_ASCII);
+        byte[] nonce = new byte[32];
+        new SecureRandom().nextBytes(nonce);
+        Signature signer = Signature.getInstance("SHA256withRSA");
+        signer.initSign(key);
+        signer.update(purpose);
+        signer.update(nonce);
+        byte[] signed = signer.sign();
+
+        Signature verifier = Signature.getInstance("SHA256withRSA");
+        verifier.initVerify(certificate.getPublicKey());
+        verifier.update(purpose);
+        verifier.update(nonce);
+        if (!verifier.verify(signed)) {
+            throw new GeneralSecurityException("FISCAL_SIGNING_KEY_CERTIFICATE_MISMATCH");
+        }
     }
 
     static final class SignedSale {

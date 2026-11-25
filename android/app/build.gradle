@@ -58,6 +58,7 @@ android {
     }
     defaultConfig {
         applicationId "com.clicpos.app"
+        buildConfigField "boolean", "POS_FISCAL_LOCAL_SIGNING_QA", "false"
         buildConfigField "boolean", "POS_DIAGNOSTICS", System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false"
         buildConfigField "boolean", "WEBVIEW_PROFILE_QA", webviewProfileQa ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -88,6 +89,10 @@ android {
         }
     }
     buildTypes {
+        debug {
+            def signingQa = System.getenv("VITE_POS_FISCAL_LOCAL_SIGNING_QA") == "true"
+            buildConfigField "boolean", "POS_FISCAL_LOCAL_SIGNING_QA", signingQa ? "true" : "false"
+        }
         release {
             if (v3Canary && signedV3CanaryOptIn) versionNameSuffix '-canary'
             if (v3Candidate && signedV3CandidateOptIn && !plainVersionName) versionNameSuffix '-v3-candidate'

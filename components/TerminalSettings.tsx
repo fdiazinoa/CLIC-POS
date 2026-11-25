@@ -28,6 +28,8 @@ import { isPartialXReportAllowed } from '../utils/seriesValidation';
 import { CLOSE_REPORT_SECTION_OPTIONS, type CloseReportType } from '../utils/closeReportOptions';
 import { resolveDeviceProfile } from '../utils/deviceProfile';
 import ServiceTaxPolicyEditor from './ServiceTaxPolicyEditor';
+import { clicAlert } from '../services/dialog/ClicDialogService';
+import { canVerifyFiscalKeyChainQa, verifyFiscalKeyChainQa } from '../services/fiscal/FiscalSigningKeyChainQa';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -197,6 +199,7 @@ const NCF_LABELS: Record<NCFType, string> = {
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId, users = [] }) => {
    const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+   const [checkingFiscalCertificate, setCheckingFiscalCertificate] = useState(false);
    const [terminals, setTerminals] = useState(() => dedupeConfiguredTerminals(config.terminals || []));
 
    const [selectedTerminalId, setSelectedTerminalId] = useState<string>(() => {
@@ -273,6 +276,38 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    const activeTerminal = useMemo(() =>
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
+
+   const canCheckFiscalCertificate = Boolean(isAdminMode && canVerifyFiscalKeyChainQa() && currentDeviceId
+      && activeTerminal?.config.currentDeviceId === currentDeviceId
+      && activeTerminal.config.fiscal?.environment === 1 && resolveTerminalErpIdentity(activeTerminal));
+
+   const checkFiscalCertificate = async () => {
+      if (!activeTerminal || !canCheckFiscalCertificate || checkingFiscalCertificate) return;
+      const issuerRnc = String(activeTerminal.config.fiscal?.credentialKey || config.companyInfo?.rnc || '')
+         .trim().replace(/[ -]/g, '');
+      setCheckingFiscalCertificate(true);
+      try {
+         await verifyFiscalKeyChainQa(resolveTerminalErpIdentity(activeTerminal), issuerRnc);
+         await clicAlert('Android comprobó que esta caja tiene acceso a la clave del certificado aprobado.', {
+            title: 'Certificado verificado', tone: 'success',
+         });
+      } catch (error) {
+         const code = error instanceof Error ? error.message : '';
+         const messages: Record<string, string> = {
+            FISCAL_SIGNING_CERTIFICATE_AUTHORITY_REQUIRED: 'El ERP todavía no aprobó un certificado para esta caja.',
+            FISCAL_SIGNING_CERTIFICATE_AUTHORITY_CHANGED: 'La autorización cambió. Vuelve a verificar el certificado.',
+            FISCAL_SIGNING_CERTIFICATE_NOT_SELECTED: 'Android no recibió una selección. Comprueba que el certificado esté instalado.',
+            FISCAL_SIGNING_CERTIFICATE_FINGERPRINT_MISMATCH: 'El certificado seleccionado es distinto al que aprobó el ERP.',
+            FISCAL_SIGNING_CERTIFICATE_INVALID: 'Android no pudo validar la vigencia del certificado seleccionado.',
+            FISCAL_SIGNING_TERMINAL_CHANGED: 'Selecciona la terminal vinculada a este dispositivo.',
+         };
+         await clicAlert(messages[code] || 'No se pudo completar la comprobación del certificado.', {
+            title: 'Certificado sin verificar', tone: 'warning',
+         });
+      } finally {
+         setCheckingFiscalCertificate(false);
+      }
+   };
 
    const masterTerminalOptions = useMemo(() => terminals.filter((terminal) => {
       if (terminal.id === selectedTerminalId) return false;
@@ -1135,6 +1170,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         {activeTab === 'FISCAL' && (
                            <div className="space-y-6">
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Landmark className="text-indigo-600" /> Fiscal</h3>
+                              {canCheckFiscalCertificate && (
+                                 <button type="button" onClick={checkFiscalCertificate} disabled={checkingFiscalCertificate}
+                                    className="rounded-xl border border-indigo-200 px-4 py-3 text-sm font-bold text-indigo-700 disabled:opacity-50">
+                                    {checkingFiscalCertificate ? 'Verificando certificado…' : 'Verificar certificado de firma local (QA)'}
+                                 </button>
+                              )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                  {['B01', 'B02', 'B04', 'B14', 'B15'].map(type => (
                                     <div key={type} className="p-5 bg-slate-50 rounded-3xl space-y-3">
