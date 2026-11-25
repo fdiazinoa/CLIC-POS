@@ -92,6 +92,7 @@ interface TicketHistoryProps {
    config: BusinessConfig;
    currentUser: User | null;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
+   onAuditLogsMirror?: (log: NonNullable<BusinessConfig['auditLogs']>[number]) => void;
    users: User[];
    roles: RoleDefinition[];
    onClose: () => void;
@@ -1498,7 +1499,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:React.MutableRefObject<{view:boolean;reprint:boolean;identity:string}>}> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument,historyAccess }) => {
+const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:React.MutableRefObject<{view:boolean;reprint:boolean;identity:string}>}> = ({ transactions, config, currentUser, onUpdateConfig, onAuditLogsMirror, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument,historyAccess }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -2144,7 +2145,7 @@ const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:Reac
       , [filteredTransactions, selectedTxId]);
 
    // --- SUPERVISOR AUTH ---
-   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, terminalId: activeTerminalId, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
+   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, onAuditLogsMirror, terminalId: activeTerminalId, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
 
    const requireCurrentUser = (): User => {
       if(!historyAccess.current.view)throw new Error('No tienes permiso para ver el historial de tickets.');

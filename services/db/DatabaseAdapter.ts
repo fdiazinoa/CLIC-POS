@@ -138,6 +138,8 @@ export interface DatabaseAdapter {
     reserveFinancialNumbers?(input: FinancialNumberReservation): Promise<FinancialNumberResult>;
 
     /** Native-only setup projection: canonical CAS, taxes/tariffs/taxRate only; no generic save fallback. */
+    /** Update only the existing canonical config when the stored document still matches. */
+    saveConfigIfUnchanged?(expected: import('../../types').BusinessConfig, next: import('../../types').BusinessConfig): Promise<boolean>;
     compareAndSwapV3SetupConfig?(expected: import('../../types').BusinessConfig,
         projected: import('../../types').BusinessConfig, assertIdentity: () => void): Promise<void>;
 

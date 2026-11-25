@@ -1,4 +1,5 @@
 import { beginSettingsReturnQa } from './settingsReturnQaTrace';
+import { persistTerminalAssignmentRepair } from './services/identity/configRepairPersistence';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -3272,11 +3273,30 @@ const AppContent: React.FC = () => {
     const activeTerminalId = localStorage.getItem('active_terminal_id');
     const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
     const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id');
-    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, {
-      activeTerminalId,
-      bindingTerminalId,
-      bindingLocalTerminalId,
-    });
+    const options = { activeTerminalId, bindingTerminalId, bindingLocalTerminalId };
+    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, options);
+    const storedConfigId = (config as BusinessConfig & { id?: string }).id;
+    if (sanitized.changed && dbAdapter.saveConfigIfUnchanged && (!storedConfigId || storedConfigId === 'current')) {
+      let current = true;
+      const repair = (stored: BusinessConfig) => clearDuplicateDeviceAssignments(stored, deviceId, options);
+      void (async () => {
+        try {
+          const repaired = await persistTerminalAssignmentRepair(dbAdapter, repair, () => current);
+          const accepted = repaired ?? (current ? await dbAdapter.getDocument<BusinessConfig>('config', 'current') : null);
+          if (accepted && current && !repair(accepted).changed) {
+            setConfig(previous => {
+              if (previous !== config) return previous;
+              const auditLogs = new Map((previous.auditLogs || []).map(log => [log.id, log]));
+              for (const log of accepted.auditLogs || []) auditLogs.set(log.id, log);
+              return auditLogs.size ? { ...accepted, auditLogs: [...auditLogs.values()] } : accepted;
+            });
+          }
+        } catch (error) {
+          console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+        }
+      })();
+      return () => { current = false; };
+    }
     const nextConfig = sanitized.config;
 
     const aliasPreferredTerminal =
@@ -3317,7 +3337,7 @@ const AppContent: React.FC = () => {
 
     if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairLocalTerminal && !shouldRepairErpTenant) return;
 
-    setConfig(nextConfig);
+    if (sanitized.changed) setConfig(nextConfig);
     if (preferredTerminalId) {
       localStorage.setItem('active_terminal_id', preferredTerminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', preferredTerminalId);
@@ -3359,9 +3379,11 @@ const AppContent: React.FC = () => {
         console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
       }
     }
-    void db.save('config', nextConfig).catch((error) => {
-      console.warn('Failed to persist duplicate terminal assignment cleanup', error);
-    });
+    if (sanitized.changed) {
+      void db.save('config', nextConfig).catch(error => {
+        console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+      });
+    }
   }, [config, deviceId]);
 
   // Helper: Get current device role (raw value, no fallback)
@@ -9995,6 +10017,16 @@ const AppContent: React.FC = () => {
     alert('Secuencia fiscal local alineada correctamente.');
   };
 
+  // Audit mirrors (supervisor authorizations) update the in-memory config; the durable
+  // source is posAuditEvents. Persisting the whole config here rebuilt/replaceConfig-blocked
+  // the catalog for ~633 ms per authorization.
+  const handleAuditLogsMirror = useCallback((log: NonNullable<BusinessConfig['auditLogs']>[number]) => {
+    setConfig(current => ({
+      ...current,
+      auditLogs: [...(current.auditLogs || []).filter(entry => entry.id !== log.id), log],
+    }));
+  }, []);
+
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log
     const tenantCompanyConfig = normalizeCompanyInfoFromTenantIdentity(newConfig);
@@ -14555,6 +14587,7 @@ const AppContent: React.FC = () => {
             onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={handleAddCustomer}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
             onUpdateActiveTableGuests={handleUpdateActiveTableGuests}
@@ -14822,6 +14855,7 @@ const AppContent: React.FC = () => {
             onInitialSelectionHandled={() => setScanTargetTicketId(null)}
             activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onClose={() => {
               setScanTargetTicketId(null); // Clear selection on close
               const returnView = historyReturnViewRef.current;
