@@ -255,6 +255,9 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
     if(persisted)transaction=persisted;
     const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+    if (!fiscalPrint && transaction.fiscalProvider === 'MSELLER' && transaction.fiscalWorkflowCheckoutId) {
+        throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED');
+    }
     const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));

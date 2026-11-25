@@ -83,9 +83,10 @@ test('actual TicketHistory email refreshes archived persisted proof after approv
  await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
 });
 
-async function workflowFixture(){
+async function workflowFixture(checkoutId?: string){
  const f=await fixture();delete f.tx.fiscalPrintProof;delete f.tx.fiscalSubmissionScope;
  Object.assign(f.tx,{ncf:'E310000001021',electronicNcf:'E310000001021',ncfType:'E31',customerSnapshot:{name:'Original incorrecto',taxId:'BAD'},currency:'DOP',fiscalEnvironment:0,fiscalIssuance:{issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal'}});
+ if (checkoutId) f.tx.fiscalWorkflowCheckoutId = checkoutId;
  const envelope={transaction:JSON.parse(JSON.stringify(f.tx))};
  const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'};
  const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
@@ -106,6 +107,46 @@ test('print readiness deadline remains bounded when transport ignores cancellati
  const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const f=await workflowFixture(),before=JSON.stringify(f.tx),old=fiscalWorkflowV2Client.cached,oldConsult=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;
  fiscalWorkflowV2Client.enabled=()=>true;fiscalWorkflowV2Client.cached=async()=>null;fiscalWorkflowV2Client.consult=()=>new Promise(()=>{});
  try{const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx,{timeoutMs:25}),undefined);assert.ok(Date.now()-start<250);assert.equal(JSON.stringify(f.tx),before);}finally{fiscalWorkflowV2Client.cached=old;fiscalWorkflowV2Client.consult=oldConsult;fiscalWorkflowV2Client.enabled=oldEnabled;}
+});
+
+test('MSeller checkout only sends signed tickets to the printer and reuses the cached timbre', async t => {
+ const { printTicket } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { tx, state } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108');
+ const stale = { ...tx };
+ delete stale.fiscalWorkflowCheckoutId;
+ const config = { currencySymbol: 'RD$', taxRate: 0, taxes: [], receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let signatureReady = false;
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  assert.equal(id, tx.id);
+  if (!signatureReady) throw new Error('Consulta temporalmente indisponible');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+
+ assert.equal(await printTicket(stale, config), false);
+ assert.deepEqual(jobs, []);
+ signatureReady = true;
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(consult.mock.callCount(), 2);
+ assert.equal(jobs.length, 2);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+ assert.equal(jobs[1], jobs[0]);
 });
 
 test('OFF print readiness and email preserve V1 proof and never consult a V2 endpoint',async()=>{const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const old=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;let network=0;fiscalWorkflowV2Client.enabled=()=>false;fiscalWorkflowV2Client.consult=async()=>{network++;throw Error('V2_FORBIDDEN');};try{const f=await fixture(),signed=await resolveFiscalPrintReadiness(f.tx);assert.ok(signed);delete f.tx.fiscalPrintProof;const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx),undefined);assert.ok(Date.now()-start<100);assert.equal((buildReceiptEmailPayload(f.tx,'fixture@example.invalid',{currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:true},companyInfo:{name:'Synthetic'},currencies:[]} as any,'RD$') as any).fiscalPrintEvidence,undefined);assert.equal(network,0);}finally{fiscalWorkflowV2Client.consult=old;fiscalWorkflowV2Client.enabled=oldEnabled;}});

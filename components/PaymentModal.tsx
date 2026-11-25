@@ -1591,7 +1591,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                               const accepted = await printTicket(completedTransaction, config);
                               setSuccessNotice(accepted
                                  ? 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
-                                 : 'La venta está registrada. Revisa la impresora y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
+                                 : 'La venta está registrada. Revisa el aviso y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
                               if (accepted && !canStartNewSale) onClose();
                            } finally {
                               printTicketPending.current = false;
