@@ -34,7 +34,6 @@ import {
 import AgendaManager from './AgendaManager';
 import SpacesManager from './SpacesManager';
 import WarehouseManager from './WarehouseManager';
-import CatalogManager from './CatalogManager';
 import TerminalSettings from './TerminalSettings';
 import HardwareSettings from './HardwareSettings';
 import CurrencySettings from './CurrencySettings';
@@ -59,6 +58,7 @@ import ReportViewer from './ReportViewer';
 import SourcingIntelligence from './SourcingIntelligence';
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
 
+const CatalogManager = React.lazy(() => import('./CatalogManager'));
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -270,26 +270,28 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       case 'CATALOG':
         return (
-          <CatalogManager
-            products={props.products}
-            config={props.config}
-            warehouses={props.warehouses}
-            transactions={props.transactions}
-            currentUser={props.currentUser}
-            roles={props.roles}
-            onUpdateProducts={props.onUpdateProducts}
-            onUpdateConfig={props.onUpdateConfig}
-            onClose={() => setCurrentView('HOME')}
-            isAdminMode={props.isAdminMode}
-            terminalId={props.terminalId}
-            initialProductId={props.initialData?.productId}
-            initialTab={props.initialData?.tab}
-            transfers={props.transfers}
-            purchaseOrders={props.purchaseOrders}
-            suppliers={props.suppliers}
-            rooms={props.rooms}
-            onUpdateRooms={props.onUpdateRooms || (() => { })}
-          />
+          <React.Suspense fallback={<p role="status" className="p-4">Cargando catálogo…</p>}>
+            <CatalogManager
+              products={props.products}
+              config={props.config}
+              warehouses={props.warehouses}
+              transactions={props.transactions}
+              currentUser={props.currentUser}
+              roles={props.roles}
+              onUpdateProducts={props.onUpdateProducts}
+              onUpdateConfig={props.onUpdateConfig}
+              onClose={() => setCurrentView('HOME')}
+              isAdminMode={props.isAdminMode}
+              terminalId={props.terminalId}
+              initialProductId={props.initialData?.productId}
+              initialTab={props.initialData?.tab}
+              transfers={props.transfers}
+              purchaseOrders={props.purchaseOrders}
+              suppliers={props.suppliers}
+              rooms={props.rooms}
+              onUpdateRooms={props.onUpdateRooms || (() => { })}
+            />
+          </React.Suspense>
         );
 
       case 'WAREHOUSES':
