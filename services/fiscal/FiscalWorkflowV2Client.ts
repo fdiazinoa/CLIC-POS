@@ -100,6 +100,24 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   });
  };
  return {
+ /** Reads the certificate identity for Android KeyChain. This does not authorize an operation. */
+ async readLocalSigningCertificate(expectedIssuerRnc: string): Promise<string | null> {
+  if (!localSigningProbeEnabled) return null;
+  if (!/^[0-9]{9}(?:[0-9]{2})?$/.test(expectedIssuerRnc)) fail('FISCAL_LOCAL_SIGNING_ISSUER_REQUIRED');
+  const epoch = generation;
+  const { data, auth } = await request(
+   'local-signing/v1/certificate', undefined, undefined, LOCAL_SIGNING_PROBE_TIMEOUT_MS,
+  );
+  if (epoch !== generation) fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+  if (data?.schemaVersion === 1 && data.authorized === false && Object.keys(data).length === 2) return null;
+  if (data?.schemaVersion !== 1 || data.authorized !== true || Object.keys(data).length !== 6
+   || data.environment !== 1 || data.issuerRnc !== expectedIssuerRnc
+   || !contexts(data.scope, scopeOf(auth.descriptor))
+   || typeof data.certificateSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.certificateSha256)) {
+   fail('FISCAL_LOCAL_SIGNING_CERTIFICATE_PROOF_INVALID');
+  }
+  return data.certificateSha256;
+ },
  /** Cached native policy shared by COBRAR and its precharge guard. Never acquires authority. */
  async checkoutFiscalStatus(type:string):Promise<{remaining:number;total:number;recovery?:boolean}|null>{
   const native = store();
