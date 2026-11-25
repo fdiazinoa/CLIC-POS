@@ -81,7 +81,8 @@ export default defineConfig(({ mode }) => {
               return 'vendor-misc';
             }
 
-            if (id.includes('/components/POSInterface.tsx')) {
+            // The root error boundary is eager even when an optional screen uses it.
+            if (id.includes('/components/POSInterface.tsx') || id.includes('/components/ErrorBoundary.tsx')) {
               return 'pos-shell';
             }
             if (id.includes('/components/TableMap.tsx') || id.includes('/components/TableLayoutDesigner.tsx')) {
@@ -113,15 +114,6 @@ export default defineConfig(({ mode }) => {
               id.includes('/components/CurrencySettings.tsx')
             ) {
               return 'settings-suite';
-            }
-            if (
-              id.includes('/components/CatalogManager.tsx') ||
-              id.includes('/components/ProductForm.tsx') ||
-              id.includes('/components/ClassificationManager.tsx') ||
-              id.includes('/components/RecipeManager.tsx') ||
-              id.includes('/components/VariantManager.tsx')
-            ) {
-              return 'catalog-suite';
             }
             if (
               id.includes('/components/FinanceDashboard.tsx') ||
