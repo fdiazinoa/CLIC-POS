@@ -1,5 +1,5 @@
 import { createUuid } from '../../utils/uuid';
-import { assertReturnPreparation, assertReturnAdmission, buildReturnSource, returnContract, returnJSON, sameReturn, returnNeed, type ReturnAttempt } from '../fiscal/FiscalReturnV1';
+import { assertReturnPreparation, assertReturnAdmission, buildReturnSource, returnContract, returnFiscalTime, returnJSON, sameReturn, returnNeed, type ReturnAttempt } from '../fiscal/FiscalReturnV1';
 import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2, type FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
 import type { DurableDocumentMutation, FinancialCommitInput } from './DatabaseAdapter';
 import { planFinancialNumbers } from './FinancialNumberReservation';
@@ -11,6 +11,14 @@ type SQL = {
     }>;
     run: (sql: string, values?: any[], transaction?: boolean) => Promise<any>;
 };
+
+function readReturnWithFiscalClock(sql: SQL, column: 'id' | 'transaction_id', value: string) {
+    return sql.query(`SELECT attempt.data, allocation.server_offset_ms AS fiscal_offset_ms
+      FROM pos_fiscal_return_attempts_v1 attempt
+      LEFT JOIN pos_offline_fiscal_allocations_v2 allocation
+        ON allocation.authorization_id = json_extract(attempt.data,'$.checkout.allocation.authorizationId') AND allocation.revoked = 0
+      WHERE attempt.${column}=?`, [value]);
+}
 export const FISCAL_RETURN_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pos_fiscal_return_attempts_v1(id TEXT PRIMARY KEY,slot TEXT NOT NULL UNIQUE,transaction_id TEXT UNIQUE,data TEXT NOT NULL,phase TEXT NOT NULL CHECK(phase IN('WAITING_AUTHORITY','PREPARING','PREPARED','SEALED','COMMITTED')));
 CREATE TRIGGER IF NOT EXISTS pos_return_phase_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
@@ -124,9 +132,12 @@ export class NativeFiscalReturnStore {
     }
     fence(id: string) {
         return this.transaction(async () => {
-            const a = await this.read('id', id);
+            const attempt = (await readReturnWithFiscalClock(this.connection(), 'id', id)).values?.[0];
+            const a = attempt && JSON.parse(attempt.data) as ReturnAttempt;
             returnNeed(a?.phase === 'SEALED' && a.preparation && a.admission, 'FISCAL_RETURN_PREPARATION_REQUIRED');
-            assertReturnAdmission(a!.admission.capability, a!.scope, a!.preparation);
+            returnNeed(Number.isSafeInteger(attempt.fiscal_offset_ms), 'FISCAL_RETURN_AUTHORITY_REQUIRED');
+            const fiscalTime = returnFiscalTime(a!.preparation!, Date.now() + attempt.fiscal_offset_ms);
+            assertReturnAdmission(a!.admission.capability, a!.scope, a!.preparation, fiscalTime);
             const row = (await this.connection().query('SELECT checkout_json FROM pos_fiscal_checkouts_v2 WHERE checkout_id=?', [a!.checkout!.checkoutId])).values?.[0];
             const checkout = row && JSON.parse(row.checkout_json);
             returnNeed(checkout && ['PREPARED', 'EFFECT_POSSIBLE'].includes(checkout.phase) && checkout.transactionId === a!.preparation!.transactionId && checkout.operationId === (a!.replacementOperationId ?? a!.operationId) && checkout.offlineSaleDate === a!.checkout!.offlineSaleDate, 'FISCAL_RETURN_CHECKOUT_CONFLICT');
@@ -165,13 +176,16 @@ export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommit
     const source = input.documents.find(x => x.collectionName === 'transactions' && x.document.documentType === 'REFUND' && x.document.ncfType === 'E34' && !x.document.articleFormatWire);
     if (!source)
         return;
-    const rows = (await sql.query('SELECT data FROM pos_fiscal_return_attempts_v1 WHERE transaction_id=?', [source.document.id])).values || [];
+    const rows = (await readReturnWithFiscalClock(sql, 'transaction_id', source.document.id)).values || [];
     returnNeed(rows.length === 1, 'FISCAL_RETURN_PREPARATION_REQUIRED');
     const a = JSON.parse(rows[0].data) as ReturnAttempt;
     returnNeed(a.phase === 'SEALED' && a.source && a.preparation && a.localCommittedAt && a.admission, 'FISCAL_RETURN_PREPARATION_REQUIRED');
     await assertReturnPreparation(a.preparation!, a);
-    assertReturnAdmission(a.admission.capability, a.scope, a.preparation);
-    returnNeed(Date.now() - Date.parse(a.admission.checkedAt) >= 0 && Date.now() - Date.parse(a.admission.checkedAt) < 15000, 'FISCAL_RETURN_ADMISSION_EXPIRED');
+    const deviceNow = Date.now(), fiscalOffset = rows[0].fiscal_offset_ms;
+    returnNeed(Number.isSafeInteger(fiscalOffset), 'FISCAL_RETURN_AUTHORITY_REQUIRED');
+    assertReturnAdmission(a.admission.capability, a.scope, a.preparation, returnFiscalTime(a.preparation!, deviceNow + fiscalOffset));
+    const admissionAge = deviceNow - Date.parse(a.admission.checkedAt);
+    returnNeed(admissionAge >= 0 && admissionAge < 15000, 'FISCAL_RETURN_ADMISSION_EXPIRED');
     const local = Date.parse(a.localCommittedAt!), p = a.preparation!;
     const civil = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santo_Domingo' }).format(n);
     returnNeed(Date.parse(p.preparedAt) <= local && local <= Date.parse(p.expiresAt) && Date.parse(a.checkout!.offlineSaleDate!) <= local && civil(local) === civil(Date.parse(a.checkout!.offlineSaleDate!)), 'FISCAL_RETURN_LOCAL_COMMIT_TIME_REQUIRED');

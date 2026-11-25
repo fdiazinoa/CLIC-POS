@@ -155,6 +155,11 @@ export interface ReturnCapability {
 }
 export const sameReturn = (a: unknown, b: unknown) => returnJSON(a) === returnJSON(b);
 const uuid = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);
+/** The ERP creates the preparation before the POS receives it. Allow for the grant clock's sampling drift. */
+export function returnFiscalTime(preparation: ReturnPreparation, clockMs: number): number {
+    const preparedAt = Date.parse(preparation.preparedAt);
+    return preparedAt > clockMs && preparedAt - clockMs <= 1000 ? preparedAt : clockMs;
+}
 export function assertReturnAdmission(c: ReturnCapability, scope: FiscalWorkflowScope, p?: ReturnPreparation, now = Date.now()) {
     returnNeed(c?.schemaVersion === 1 && c.version === 1 && c.capability === 'fiscalReturnV1' && c.profile === RETURN_PROFILE && c.enabled === true && c.ready === true && c.readiness?.admission === true && c.operationKind === 'RETURN' && c.ncfType === 'E34' && c.birthSchemaVersion === 3 && c.eventSchemaVersion === 1 && c.requiresOnlinePreparation === true && sameReturn(c.scope, scope) && uuid(c.authorizationId) && /^[a-f0-9]{64}$/.test(c.authorityHash) && /^[a-f0-9]{64}$/.test(c.bindingAuthorityHash) && [0, 1, 2].includes(c.environment) && /^\d{9}(?:\d{2})?$/.test(c.issuerRnc), 'FISCAL_RETURN_AUTHORITY_REQUIRED');
     returnNeed(c.transport?.requiresPreservedOuterContract === true && ((c.transport.batch?.enabled === true && c.transport.batch.path === '/api/sync/inbox/batch') || (c.transport.singular?.enabled === true && c.transport.singular.path === '/api/sync/inbox')), 'FISCAL_RETURN_TRANSPORT_REQUIRED');

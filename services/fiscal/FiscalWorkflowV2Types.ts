@@ -16,7 +16,7 @@ export interface FiscalWorkflowStore {
  reserveAllocationCheckout?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,cartIdentity:string,operationId:string,context?:import('./OfflineFiscalLease').TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>;
  allocationAvailability?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string):Promise<{authorizationId:string;remaining:Record<string,number>;total?:Record<string,number>}|null>;
  allocationCommitPreconditions?(checkout:FiscalWorkflowCheckoutV2):Promise<Array<{collection:string;id:string;expected:string|null}>>;
- allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot;fiscalEnvironment:0|1|2}>;
+ allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot;fiscalEnvironment:0|1|2;fiscalTimeMs:number}>;
 
  /** Payment intents bound to an attempt transaction (why a local release may refuse). */
  intentStates?(transactionId:string):Promise<Array<{paymentId:string;status:string}>>;
