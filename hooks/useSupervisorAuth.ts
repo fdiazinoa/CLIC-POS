@@ -16,7 +16,7 @@ interface UseSupervisorAuthProps {
     roles: RoleDefinition[];
     onUpdateConfig: (newConfig: BusinessConfig) => void;
     /** In-memory audit mirror: never persists the whole config. */
-    onAuditLogsMirror?: (newConfig: BusinessConfig) => void;
+    onAuditLogsMirror?: (log: NonNullable<BusinessConfig['auditLogs']>[number]) => void;
 }
 
 interface RequestApprovalParams {
@@ -168,7 +168,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
         const updated = { ...current, auditLogs: [...logsById.values()] };
         configRef.current = updated;
         try {
-            const update = (onAuditLogsMirror || onUpdateConfig)(updated);
+            const update = onAuditLogsMirror ? onAuditLogsMirror(newLog) : onUpdateConfig(updated);
             void Promise.resolve(update).catch(() => {
                 if (typeof window !== 'undefined') window.alert('La copia local de auditoría no se pudo actualizar. Revisa los pendientes y el almacenamiento del POS.');
             });

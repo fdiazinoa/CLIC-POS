@@ -1,5 +1,5 @@
 import { beginSettingsReturnQa } from './settingsReturnQaTrace';
-import { repairStoredConfig } from './services/identity/configRepairPersistence';
+import { persistTerminalAssignmentRepair } from './services/identity/configRepairPersistence';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -3273,11 +3273,24 @@ const AppContent: React.FC = () => {
     const activeTerminalId = localStorage.getItem('active_terminal_id');
     const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
     const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id');
-    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, {
-      activeTerminalId,
-      bindingTerminalId,
-      bindingLocalTerminalId,
-    });
+    const options = { activeTerminalId, bindingTerminalId, bindingLocalTerminalId };
+    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, options);
+    if (sanitized.changed && dbAdapter.saveConfigIfUnchanged) {
+      let current = true;
+      const repair = (stored: BusinessConfig) => clearDuplicateDeviceAssignments(stored, deviceId, options);
+      void (async () => {
+        try {
+          const repaired = await persistTerminalAssignmentRepair(dbAdapter, repair, () => current);
+          const accepted = repaired ?? (current ? await dbAdapter.getDocument<BusinessConfig>('config', 'current') : null);
+          if (accepted && current && !repair(accepted).changed) {
+            setConfig(previous => previous === config ? accepted : previous);
+          }
+        } catch (error) {
+          console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+        }
+      })();
+      return () => { current = false; };
+    }
     const nextConfig = sanitized.config;
 
     const aliasPreferredTerminal =
@@ -3318,7 +3331,7 @@ const AppContent: React.FC = () => {
 
     if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairLocalTerminal && !shouldRepairErpTenant) return;
 
-    setConfig(nextConfig);
+    if (sanitized.changed) setConfig(nextConfig);
     if (preferredTerminalId) {
       localStorage.setItem('active_terminal_id', preferredTerminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', preferredTerminalId);
@@ -3360,26 +3373,10 @@ const AppContent: React.FC = () => {
         console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
       }
     }
-    // Only persist when the stored document actually changes. Local-key/profile/credential
-    // repairs do not need a replaceConfig of the whole document (the ~585 ms catalog block).
-    // When it does change, repair the latest stored copy instead of the stale React snapshot.
     if (sanitized.changed) {
-      void (async () => {
-        try {
-          const stored = await db.getDocument('config', 'current') as BusinessConfig | null;
-          const repaired = repairStoredConfig(stored, nextConfig, deviceId, {
-            activeTerminalId,
-            bindingTerminalId,
-            bindingLocalTerminalId,
-          }, clearDuplicateDeviceAssignments);
-          if (repaired) {
-            await db.save('config', repaired);
-            setConfig(repaired);
-          }
-        } catch (error) {
-          console.warn('Failed to persist duplicate terminal assignment cleanup', error);
-        }
-      })();
+      void db.save('config', nextConfig).catch(error => {
+        console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+      });
     }
   }, [config, deviceId]);
 
@@ -10017,7 +10014,12 @@ const AppContent: React.FC = () => {
   // Audit mirrors (supervisor authorizations) update the in-memory config; the durable
   // source is posAuditEvents. Persisting the whole config here rebuilt/replaceConfig-blocked
   // the catalog for ~633 ms per authorization.
-  const handleAuditLogsMirror = (newConfig: BusinessConfig) => { setConfig(newConfig); };
+  const handleAuditLogsMirror = useCallback((log: NonNullable<BusinessConfig['auditLogs']>[number]) => {
+    setConfig(current => ({
+      ...current,
+      auditLogs: [...(current.auditLogs || []).filter(entry => entry.id !== log.id), log],
+    }));
+  }, []);
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log

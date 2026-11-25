@@ -3,7 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { IDBFactory } from 'fake-indexeddb';
-import { repairStoredConfig } from '../services/identity/configRepairPersistence';
+import { persistTerminalAssignmentRepair } from '../services/identity/configRepairPersistence';
 import { buildAuthorizationLog, persistAuthorizationLog, reconcileAuthorizationBackups } from '../services/audit/PosOperationalAudit';
 import type { BusinessConfig, User } from '../types';
 
@@ -92,14 +92,78 @@ test('supervisor audit updates the in-memory mirror without persisting the whole
     }
 });
 
-test('terminal identity repair persists only when the stored document actually changes', () => {
-    const fallback = { id: 'prop', marker: 'stale-react-snapshot', terminals: [] } as unknown as BusinessConfig;
-    const stored = { id: 'stored', marker: 'erp-newer', terminals: [] } as unknown as BusinessConfig;
-    const unchanged = (config: BusinessConfig) => ({ config, changed: false, preferredTerminalId: null });
-    assert.equal(repairStoredConfig(stored, fallback, 'DEV-A', {}, unchanged), null, 'local-only repairs must not write config');
+test('identity repair skips unchanged config and retries against the ERP update after a CAS miss', async () => {
+    const previous = { id: 'current', marker: 'before', terminals: [] } as unknown as BusinessConfig;
+    const erp = { ...previous, marker: 'erp-newer' };
+    let stored = previous;
+    let writes = 0;
+    const db = {
+        getDocument: async <T>() => stored as T,
+        saveConfigIfUnchanged: async (expected: BusinessConfig, next: BusinessConfig) => {
+            if (++writes === 1) stored = erp;
+            if (stored !== expected) return false;
+            stored = next;
+            return true;
+        },
+    };
+    assert.equal(await persistTerminalAssignmentRepair(db,
+        config => ({ config, changed: false, preferredTerminalId: null })), null);
+    assert.equal(writes, 0);
 
-    const changed = (config: BusinessConfig) => ({ config: { ...config, terminals: [{ id: 'only' }] } as unknown as BusinessConfig, changed: true, preferredTerminalId: 'only' });
-    const repaired = repairStoredConfig(stored, fallback, 'DEV-A', {}, changed);
-    assert.equal((repaired as any)?.marker, 'erp-newer', 'concurrency: the repair must use the latest stored copy, not the stale prop');
-    assert.deepEqual((repaired as any)?.terminals, [{ id: 'only' }]);
+    const result = await persistTerminalAssignmentRepair(db, config => ({
+        config: { ...config, terminals: [{ id: 'only' }] } as BusinessConfig, changed: true, preferredTerminalId: 'only',
+    }));
+    assert.equal(writes, 2);
+    assert.equal(stored, result);
+    assert.equal((result as unknown as { marker: string }).marker, 'erp-newer');
+    assert.deepEqual(result?.terminals, [{ id: 'only' }]);
+});
+
+test('SQLite CAS keeps a concurrent config update and writes the repaired canonical row only', async () => {
+    const { nativeFixture } = await import('./articleFormatsNativeFixture');
+    const fixture = await nativeFixture();
+    try {
+        const before = (await fixture.adapter.getDocument<BusinessConfig>('config', 'current'))!;
+        const erp = { ...before, marker: 'erp-newer' };
+        fixture.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(erp));
+        fixture.db.exec(`INSERT INTO documents VALUES ('config','other','{"id":"other"}',1,'fixture')`);
+        assert.equal(await fixture.adapter.saveConfigIfUnchanged(before, { ...before, terminals: [] }), false);
+        assert.deepEqual(await fixture.adapter.getDocument('config', 'current'), erp);
+        assert.equal(await fixture.adapter.saveConfigIfUnchanged(erp, { ...erp, terminals: [] }), true);
+        assert.deepEqual(await fixture.adapter.getDocument('config', 'current'), { ...erp, terminals: [] });
+        assert.deepEqual(await fixture.adapter.getDocument('config', 'other'), { id: 'other' });
+    } finally {
+        fixture.db.close();
+    }
+});
+
+test('IndexedDB CAS updates only the config seen by the caller', async () => {
+    const prior = new Map(['indexedDB', 'window', 'localStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+    const storage = new Map<string, string>();
+    Object.defineProperties(globalThis, {
+        indexedDB: { configurable: true, value: new IDBFactory() },
+        window: { configurable: true, value: { setTimeout, clearTimeout } },
+        localStorage: { configurable: true, value: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) } },
+    });
+    const { IndexedDBAdapter } = await import('../services/db/adapters/IndexedDBAdapter');
+    const adapter = new IndexedDBAdapter();
+    try {
+        await adapter.connect();
+        const initial = { id: 'current', terminals: [] } as unknown as BusinessConfig & { id: string };
+        const erp = { ...initial, publication: 'newer' };
+        await adapter.saveDocument('config', initial);
+        const read = (await adapter.getDocument<BusinessConfig>('config', 'current'))!;
+        await adapter.saveDocument('config', erp);
+        assert.equal(await adapter.saveConfigIfUnchanged(read, { ...read, terminals: [] }), false);
+        assert.deepEqual(await adapter.getDocument('config', 'current'), erp);
+        const repaired = { ...erp, terminals: [{ id: 'terminal' }] } as BusinessConfig;
+        assert.equal(await adapter.saveConfigIfUnchanged(erp, repaired), true);
+        assert.deepEqual(await adapter.getDocument('config', 'current'), repaired);
+    } finally {
+        await adapter.disconnect();
+        for (const [key, descriptor] of prior) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else Reflect.deleteProperty(globalThis, key);
+        }
+    }
 });

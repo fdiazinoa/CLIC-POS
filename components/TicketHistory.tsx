@@ -92,7 +92,7 @@ interface TicketHistoryProps {
    config: BusinessConfig;
    currentUser: User | null;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
-   onAuditLogsMirror?: (newConfig: BusinessConfig) => void;
+   onAuditLogsMirror?: (log: NonNullable<BusinessConfig['auditLogs']>[number]) => void;
    users: User[];
    roles: RoleDefinition[];
    onClose: () => void;

@@ -314,6 +314,21 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.replaceStoredDocuments(collectionName, docs);
     }
 
+    async saveConfigIfUnchanged(expected: import('../../../types').BusinessConfig,
+        next: import('../../../types').BusinessConfig): Promise<boolean> {
+        const expectedJson = JSON.stringify(expected);
+        const updatedJson = JSON.stringify({ ...compactStoredTerminalCatalog(next), id: 'current' });
+        return this.withWriteLock(() => this.withNativeTransaction(async () => {
+            const db = this.ensureDb();
+            await db.run(
+                "UPDATE documents SET data=?,updatedAt=? WHERE collection_name='config' AND doc_id='current' AND data=?",
+                [updatedJson, new Date().toISOString(), expectedJson], false,
+            );
+            const changed = await db.query('SELECT changes() AS changed');
+            return Number(changed.values?.[0]?.changed) === 1;
+        }));
+    }
+
     async compareAndSwapV3SetupConfig(expected: import('../../../types').BusinessConfig,
         projected: import('../../../types').BusinessConfig, assertIdentity: () => void): Promise<void> {
         // Freeze inputs before waiting on the lane; callers cannot mutate a queued precondition.

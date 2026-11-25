@@ -18,7 +18,7 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
         void (async () => {
             try {
                 const rows = await dbAdapter.getCollection(POS_AUDIT_COLLECTION) as PosAuditQueueItem[];
-                if (alive) setDurableLogs((rows || []).map(row => row.event).filter(Boolean));
+                if (alive && Array.isArray(rows)) setDurableLogs(rows.map(row => row?.event).filter(Boolean));
             } catch { /* Keep the config mirror when the queue is unavailable. */ }
         })();
         return () => { alive = false; };

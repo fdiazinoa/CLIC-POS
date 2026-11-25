@@ -343,7 +343,7 @@ export interface POSInterfaceProps {
    onTransactionComplete: (txn: Transaction) => void | Promise<void>;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
-   onAuditLogsMirror?: (newConfig: BusinessConfig) => void;
+   onAuditLogsMirror?: (log: NonNullable<BusinessConfig['auditLogs']>[number]) => void;
    activeTerminalId: string;
    activeTable?: Table | null;
    accountItemActionRequest?: AccountItemActionRequest | null;
