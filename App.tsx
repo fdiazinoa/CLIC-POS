@@ -343,6 +343,7 @@ import { printComanda, printIntegratedPaymentArtifacts, printPrecuenta, printTic
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { readRefundOriginal, persistStandaloneRefundTransaction } from './services/localRefundPersistence';
+import { prepareCommittedFiscalPrint } from './services/fiscal/FiscalPrintEvidence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import {
   buildMasterUrlCandidates,
@@ -11848,6 +11849,8 @@ const AppContent: React.FC = () => {
         result = {transaction:completed,created:false};
       }
       onCommitted?.(result.transaction);
+      const committedFiscalCheckout = result.created && result.transaction.fiscalProvider === 'MSELLER' && result.transaction.fiscalWorkflowCheckoutId;
+      if (committedFiscalCheckout) void prepareCommittedFiscalPrint(result.transaction).catch(console.error);
       if(result.created&&txn.legacySaleNumbering===1)transactionService.broadcastCommittedNumbers(result.transaction);
       if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId||txn.legacySaleNumbering===1) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
@@ -11855,7 +11858,7 @@ const AppContent: React.FC = () => {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;
         if (updated) setCustomers(previous => previous.map(row => row.id === updated.id ? updated : row));
       }
-      syncFiscalDocument(result.transaction).catch(console.error);
+      if (!committedFiscalCheckout) syncFiscalDocument(result.transaction).catch(console.error);
       backgroundSyncManager.triggerSync().catch(console.error);
       return;
     }
@@ -13240,10 +13243,11 @@ const AppContent: React.FC = () => {
             return result.refund;
           }});
         const result=await consumer.process(originalTx,itemsToRefund,conditions,reason,seriesId,{id:currentUser?.id||'sys',name:currentUser?.name||'System'},options.returnSettlementDestination);
-        const fresh=await db.get('transactions') as Transaction[];if(Array.isArray(fresh))setTransactions(fresh);
-        const products=await readAppProducts();if(products.length)setProducts(products);
+        void prepareCommittedFiscalPrint(result).catch(console.error);
+        const [fresh, products] = await Promise.all([db.get('transactions'), readAppProducts()]);
+        if (Array.isArray(fresh)) setTransactions(fresh as Transaction[]);
+        if (products.length) setProducts(products);
         backgroundSyncManager.triggerSync().catch(console.error);
-        void fiscalWorkflowV2Client.consult(result.id).catch(()=>{});
         alert(`Devolución guardada: ${result.displayId || result.id}. Pendiente de sincronización y confirmación fiscal; guardar no equivale a aceptación DGII.`);
         return result;
       }catch(error){

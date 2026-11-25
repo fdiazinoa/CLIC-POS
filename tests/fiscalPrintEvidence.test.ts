@@ -128,7 +128,7 @@ test('MSeller checkout only sends signed tickets to the printer and reuses the c
  t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
  const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
   assert.equal(id, tx.id);
-  if (!signatureReady) throw new Error('Consulta temporalmente indisponible');
+  if (!signatureReady) throw new Error('FISCAL_WORKFLOW_AUTH_REQUIRED');
   cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
   return cached;
  });
@@ -147,6 +147,46 @@ test('MSeller checkout only sends signed tickets to the printer and reuses the c
  assert.match(jobs[0], /NVrTbH/);
  assert.match(jobs[0], /Pendiente de confirmacion/);
  assert.equal(jobs[1], jobs[0]);
+});
+
+test('print readiness survives a transient status error and returns a signed pending timbre', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { tx, state } = await workflowFixture();
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) throw new Error('FISCAL_WORKFLOW_UNAVAILABLE');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+
+ const display = await resolveFiscalPrintReadiness(tx, { timeoutMs: 6000 });
+ assert.equal(attempts, 2);
+ assert.equal(display?.securityCode, state.signature.securityCode);
+ assert.equal(display?.dgiiAccepted, false);
+});
+
+test('committed MSeller sales and returns send the existing outbox before reading print status', async t => {
+ const { prepareCommittedFiscalPrint } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { durableOutboxBatchSender } = await import('../services/sync/DurableOutboxBatchSender');
+ const operations: string[] = [];
+ const { tx } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108');
+ t.mock.method(durableOutboxBatchSender, 'sendNext', async () => { operations.push('outbox'); });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => null);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  operations.push(id);
+  return { state: 'HELD', signature: null };
+ });
+
+ await prepareCommittedFiscalPrint({ ...tx, id: 'sale-e32', ncfType: 'E32' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'return-e34', ncfType: 'E34', documentType: 'REFUND' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'legacy', fiscalWorkflowCheckoutId: undefined });
+ assert.deepEqual(operations, ['outbox', 'sale-e32', 'outbox', 'return-e34']);
 });
 
 test('OFF print readiness and email preserve V1 proof and never consult a V2 endpoint',async()=>{const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const old=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;let network=0;fiscalWorkflowV2Client.enabled=()=>false;fiscalWorkflowV2Client.consult=async()=>{network++;throw Error('V2_FORBIDDEN');};try{const f=await fixture(),signed=await resolveFiscalPrintReadiness(f.tx);assert.ok(signed);delete f.tx.fiscalPrintProof;const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx),undefined);assert.ok(Date.now()-start<100);assert.equal((buildReceiptEmailPayload(f.tx,'fixture@example.invalid',{currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:true},companyInfo:{name:'Synthetic'},currencies:[]} as any,'RD$') as any).fiscalPrintEvidence,undefined);assert.equal(network,0);}finally{fiscalWorkflowV2Client.consult=old;fiscalWorkflowV2Client.enabled=oldEnabled;}});

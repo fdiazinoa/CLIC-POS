@@ -103,10 +103,28 @@ export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000
  const timer=setTimeout(()=>{abort();finishDeadline();},budget);
  controller.signal.addEventListener('abort',finishDeadline,{once:true});
  try{
-  do{try{const state=await Promise.race([fiscalWorkflowV2Client.consult(tx.id,controller.signal),stopped]);if(!state)return display;display=await resolveFiscalPrintDisplay(tx);if(display||state.decision==='REJECTED'||state.state==='HELD'||state.state==='NEEDS_CORRECTION')return display;}catch{ return display; }
+  do{
+   try {
+    const state = await Promise.race([fiscalWorkflowV2Client.consult(tx.id, controller.signal), stopped]);
+    if (!state) return display;
+    if (state.signature) display = await resolveFiscalPrintDisplay(tx);
+    if (display || state.decision === 'REJECTED' || state.state === 'HELD' || state.state === 'NEEDS_CORRECTION') return display;
+   } catch (error) {
+    if (controller.signal.aborted || /DISABLED|AUTH_REQUIRED|SCOPE_CHANGED|SOURCE_MISMATCH/.test((error as Error)?.message || '')) return display;
+   }
    const left=deadline-Date.now();if(left<=0||controller.signal.aborted)break;
    await new Promise<void>(resolve=>{const done=()=>{clearTimeout(wait);controller.signal.removeEventListener('abort',done);resolve();};const wait=setTimeout(done,Math.min(1500,left));controller.signal.addEventListener('abort',done,{once:true});});
   }while(!controller.signal.aborted&&Date.now()<deadline);
   return display;
  }finally{clearTimeout(timer);controller.signal.removeEventListener('abort',finishDeadline);controller.abort();signal?.removeEventListener('abort',abort);}
+}
+
+/** Dispatch the existing durable batch and look up its timbre off the checkout path. */
+export async function prepareCommittedFiscalPrint(tx: Transaction): Promise<void> {
+ if (tx.fiscalProvider !== 'MSELLER' || !tx.fiscalWorkflowCheckoutId) return;
+ const { fiscalWorkflowV2Client } = await import('./FiscalWorkflowV2Client');
+ if (!fiscalWorkflowV2Client.enabled() || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+ const { durableOutboxBatchSender } = await import('../sync/DurableOutboxBatchSender');
+ await durableOutboxBatchSender.sendNext();
+ await resolveFiscalPrintReadiness(tx);
 }

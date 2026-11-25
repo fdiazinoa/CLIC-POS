@@ -35,6 +35,38 @@ const record = (index: number, options: {
     lastError: null,
 });
 
+test('a post-commit send waits for the active sender and leases newly committed rows afterwards', async () => {
+    let leaseCalls = 0;
+    let unblock!: () => void;
+    let started!: () => void;
+    const transportStarted = new Promise<void>(resolve => { started = resolve; });
+    const firstTransport = new Promise<void>(resolve => { unblock = resolve; });
+    const repository = {
+        recoverExpiredLeases: async () => {},
+        leaseDue: async () => [record(++leaseCalls)],
+        releaseUnsent: async () => {},
+        markAppliedErp: async () => {},
+        refreshMetrics: async () => {},
+    } as unknown as ConstructorParameters<typeof DurableOutboxBatchSender>[0];
+    const sender = new DurableOutboxBatchSender(repository, async events => {
+        if (events[0].eventId === 'event-1') {
+            started();
+            await firstTransport;
+        }
+        return { results: [{ eventId: events[0].eventId, status: 'APPLIED' }] };
+    });
+
+    const background = sender.sendNext();
+    await transportStarted;
+    const committed = sender.sendNext();
+    await Promise.resolve();
+    assert.equal(leaseCalls, 1);
+    unblock();
+    assert.equal((await background).applied, 1);
+    assert.equal((await committed).applied, 1);
+    assert.equal(leaseCalls, 2);
+});
+
 test('batch selection stops at 25 transactions while preserving FIFO', () => {
     const leased = Array.from({ length: 40 }, (_, index) => record(index + 1));
     const selection = selectDurableBatch(leased);
