@@ -1,4 +1,4 @@
-import { measureSettingsReturnQa } from '../../settingsReturnQaTrace';
+import { markSettingsReturnQa, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import {validOrdinaryReturnReference,originalReferencePendingCode} from './FiscalReturnV1';
 import {verifyReturnStatus,returnStatusMessage} from './FiscalReturnStatus';
 import type {DispatchFiscalPreparation} from '../db/DispatchFiscalPreparation';
@@ -56,7 +56,11 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
   return digest===state.originalDigestV2;
  }catch{return false;}
 }
-export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,readOfflineAuthority=readOfflineFiscalLocalAuthority,fetchImpl=fetch,prepareDispatch=(input:DispatchFiscalPreparation)=>{if(!dbAdapter.prepareDispatchFiscalCheckout)throw Error('DISPATCH_NATIVE_ATOMIC_CHECKOUT_REQUIRED');return dbAdapter.prepareDispatchFiscalCheckout(input);},store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
+const LOCAL_SIGNING_PREFERENCE_QA = import.meta.env?.VITE_POS_FISCAL_LOCAL_SIGNING_QA === 'true';
+const LOCAL_SIGNING_PROBE_INTERVAL_MS = 60_000;
+const LOCAL_SIGNING_PROBE_TIMEOUT_MS = 2_000;
+
+export function createFiscalWorkflowV2Client({localSigningProbeEnabled=LOCAL_SIGNING_PREFERENCE_QA,readAuth=captureFiscalStatusBoundContext,readOfflineAuthority=readOfflineFiscalLocalAuthority,fetchImpl=fetch,prepareDispatch=(input:DispatchFiscalPreparation)=>{if(!dbAdapter.prepareDispatchFiscalCheckout)throw Error('DISPATCH_NATIVE_ATOMIC_CHECKOUT_REQUIRED');return dbAdapter.prepareDispatchFiscalCheckout(input);},store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
  let offlinePrefetch:Promise<void>|null=null;
  const retirements=new Map<string,Promise<FiscalRetirementRecord>>();
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
@@ -70,6 +74,30 @@ const RETIREMENT_TIMEOUT_MS = 30_000;
 const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,timeoutMs=8000)=>{
   const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,timeoutMs);
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+ };
+ let lastLocalSigningProbe: {binding: string; at: number} | null = null;
+ const probeLocalSigningPreference = (auth: ReturnType<typeof readAuth>) => {
+  if (!localSigningProbeEnabled) return;
+  const binding = authorityFingerprint(auth), at = performance.now(), epoch = generation;
+  if (lastLocalSigningProbe?.binding === binding
+    && at - lastLocalSigningProbe.at < LOCAL_SIGNING_PROBE_INTERVAL_MS) return;
+  lastLocalSigningProbe = {binding, at};
+  void measureSettingsReturnQa('fiscal.localSigningPreference', async () => {
+   try {
+    const {data, auth: responseAuth} = await request(
+     'local-signing/v1/capability', undefined, undefined, LOCAL_SIGNING_PROBE_TIMEOUT_MS,
+    );
+    auth.assertCurrent();
+    if (epoch !== generation || authorityFingerprint(responseAuth) !== binding) return;
+    if (data?.schemaVersion !== 1 || data.capability !== 'fiscalLocalSigningV1'
+      || typeof data.eligible !== 'boolean') throw Error('FISCAL_LOCAL_SIGNING_PREFERENCE_INVALID');
+    markSettingsReturnQa(data.eligible ? 'fiscal.localSigningPreference.on' : 'fiscal.localSigningPreference.off');
+   } catch {
+    if (epoch !== generation) return;
+    try { auth.assertCurrent(); } catch { return; }
+    markSettingsReturnQa('fiscal.localSigningPreference.unavailable');
+   }
+  });
  };
  return {
  /** Cached native policy shared by COBRAR and its precharge guard. Never acquires authority. */
@@ -315,9 +343,10 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   return checkout;
  },
  enabled(){try{const auth=readAuth();auth.assertCurrent();return hasFiscalWorkflowCapability(auth.base,auth.headers);}catch{return false;}},
- invalidate(){generation++;cursor='';currentAuthority=null;},
+ invalidate(){generation++;cursor='';currentAuthority=null;lastLocalSigningProbe=null;},
  discover():Promise<void>{
   let auth:ReturnType<typeof readAuth>;try{auth=readAuth();auth.assertCurrent();}catch(error){return Promise.reject(error);}
+  probeLocalSigningPreference(auth);
   if(hasFiscalWorkflowCapability(auth.base,auth.headers))return Promise.resolve();
   const key=authorityFingerprint(auth),epoch=generation;if(discovering?.key===key)return discovering.promise;
   const promise=(async()=>{

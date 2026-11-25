@@ -5,18 +5,28 @@ import {clearFiscalWorkflowCapability,subscribeFiscalWorkflowCapability} from '.
 import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA} from '../services/db/FiscalWorkflowV2Store';
 import {getDefaultFiscalProvider,getEffectiveFiscalComplianceConfig} from '../utils/fiscal/fiscalHelpers';
 const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'},base='https://erp.example.invalid/api/sync';
-function fixture({status=200,mutate=(data:any)=>data,hold=false,timeout=false,localExpiry='2099-01-01'}={}){
+function fixture({status=200,mutate=(data:any)=>data,hold=false,timeout=false,localExpiry='2099-01-01',localSigningProbeEnabled=false,probeStatus=200,holdProbe=false}={}){
  clearFiscalWorkflowCapability();const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA);const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>({changes:sql.prepare(q).run(...v)}),execute:async(q:string)=>{sql.exec(q);}},store=new NativeFiscalWorkflowV2Store(()=>bridge,work=>work());
  const identity={erpSyncBaseUrl:base,tenantId:scope.tenantId,terminalId:scope.terminalId,deviceId:scope.deviceId,syncToken:'synthetic-sync'};let credentials:any={...scope,syncToken:identity.syncToken,deviceToken:'synthetic-device',syncTokenExpiresAt:localExpiry,deviceTokenExpiresAt:'2020-01-01',authStatus:'AUTHENTICATED',deviceTokenSource:'ERP_REGISTER'},capCalls=0,permitCalls=0,release:()=>void=()=>{};
+ let probeCalls=0,releaseProbe:()=>void=()=>{};
  const data={schemaVersion:2,capability:'fiscalWorkflowV2',version:2,scope,authorityHash:'a'.repeat(64),sessionExpiresAt:'2099-01-01'};
- const client=createFiscalWorkflowV2Client({store:()=>store,readAuth:()=>captureFiscalStatusBoundContext(()=>identity,()=>credentials),fetchImpl:async(url:any,options:any)=>{
+ const client=createFiscalWorkflowV2Client({localSigningProbeEnabled,store:()=>store,readAuth:()=>captureFiscalStatusBoundContext(()=>identity,()=>credentials),fetchImpl:async(url:any,options:any)=>{
   assert.equal(options.redirect,'error');assert.equal(options.credentials,'omit');assert.equal(options.cache,'no-store');
+  if (String(url).endsWith('/local-signing/v1/capability')) {
+   probeCalls++;
+   assert.equal(options.method, 'GET');
+   assert.equal(options.body, undefined);
+   assert.equal(options.headers['X-Terminal-Id'], scope.terminalId);
+   assert.equal(options.headers['X-Device-Id'], scope.deviceId);
+   if (holdProbe) await new Promise<void>(resolve => { releaseProbe = resolve; });
+   return Response.json({schemaVersion:1,capability:'fiscalLocalSigningV1',eligible:true},{status:probeStatus});
+  }
   if(String(url).endsWith('/capability')){capCalls++;assert.equal(options.method,'GET');assert.equal(options.body,undefined);if(timeout)return new Promise((_r,reject)=>options.signal.addEventListener('abort',()=>reject(Error('SYNTHETIC_ABORT_TIMEOUT')),{once:true}));if(hold&&capCalls===1)await new Promise<void>(r=>{release=r;});return new Response(JSON.stringify(status===200?mutate(structuredClone(data)):{code:status===503?'FISCAL_WORKFLOW_DISABLED':'AUTH_REQUIRED'}),{status});}
   assert.match(String(url),/\/permits$/);assert.equal(options.method,'POST');permitCalls++;return new Response(JSON.stringify({schemaVersion:2,authorityHash:'a'.repeat(64),permits:[{schemaVersion:2,permitId:'00000000-0000-4000-8000-000000000001',transactionId:'10000000-0000-4000-8000-000000000001',nonce:'synthetic',createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600000).toISOString(),scope,issuerRnc:'101010101',environment:0,authorityHash:'a'.repeat(64),operationKind:'SALE',state:'PERMIT'}]}));
  }} as any);
- return {client,sql,identity,get credentials(){return credentials;},set credentials(c:any){credentials=c;},release(){release();},counts:()=>({capCalls,permitCalls}),close(){clearFiscalWorkflowCapability();sql.close();}};
+ return {client,sql,identity,get credentials(){return credentials;},set credentials(c:any){credentials=c;},release(){release();},releaseProbe(){releaseProbe();},probeCalls:()=>probeCalls,counts:()=>({capCalls,permitCalls}),close(){clearFiscalWorkflowCapability();sql.close();}};
 }
-function actualAutomatic(bindings:Record<string,any>){const text=readFileSync(new URL('../App.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('App.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:any;function visit(n:any){if(ts.isCallExpression(n)&&n.expression.getText(ast)==='attachFiscalStatusLifecycle'){const object=n.arguments[0];if(ts.isObjectLiteralExpression(object)){const property=object.properties.find((p:any)=>p.name?.getText(ast)==='runAutomatic');if(property&&ts.isPropertyAssignment(property))arrow=property.initializer;}}ts.forEachChild(n,visit);}visit(ast);assert.ok(arrow);const js=ts.transpileModule('const run='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;return new Function(...Object.keys(bindings),js+';return run;')(...Object.values(bindings));}
+function actualAutomatic(bindings:Record<string,any>){const text=readFileSync(new URL('../App.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('App.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:any;function visit(n:any){if(ts.isCallExpression(n)&&n.expression.getText(ast)==='attachFiscalStatusLifecycle'){const object=n.arguments[0];if(ts.isObjectLiteralExpression(object)){const property=object.properties.find((p:any)=>p.name?.getText(ast)==='runAutomatic');if(property&&ts.isPropertyAssignment(property)&&property.initializer.getText(ast).includes('fiscalWorkflowV2Client.discover('))arrow=property.initializer;}}ts.forEachChild(n,visit);}visit(ast);assert.ok(arrow);const js=ts.transpileModule('const run='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;return new Function(...Object.keys(bindings),js+';return run;')(...Object.values(bindings));}
 test('cached cold boot with zero V3 requests uses actual App lifecycle discovery then normal authenticated native-pool preparation',async()=>{const f=fixture();try{const config:any={terminals:[{id:'terminal',config:{currentDeviceId:'device',fiscal:{mode:'ECF',enabled:true,providerId:'MSELLER'}}}]};const run=actualAutomatic({config,deviceId:'device',getDefaultFiscalProvider,getEffectiveFiscalComplianceConfig,fiscalWorkflowV2Client:f.client,fiscalStatusWorker:{runAutomatic:async()=>{}}});assert.equal(f.client.enabled(),false);await run();assert.equal(f.client.enabled(),true);assert.deepEqual(f.counts(),{capCalls:1,permitCalls:1});assert.equal((f.sql.prepare("SELECT count(*) n FROM pos_fiscal_permits_v2 WHERE state='AVAILABLE'").get() as any).n,1);assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,0);}finally{f.close();}});
 test('cold-boot discovery is singleflight and availability alone never substitutes for a permit response',async()=>{const f=fixture({hold:true});try{const a=f.client.discover(),b=f.client.discover();assert.equal(a,b);await Promise.resolve();f.release();await a;assert.equal(f.client.enabled(),true);assert.deepEqual(f.counts(),{capCalls:1,permitCalls:0});await assert.rejects(f.client.reserveCheckout('cart','operation',{requirePermit:true}),/PERMIT_REQUIRED/);await f.client.discover();assert.equal(f.counts().capCalls,1);}finally{f.close();}});
 for(const status of [401,503,404])test(`discovery HTTP ${status} leaves capability OFF and does not mint`,async()=>{const f=fixture({status});try{await assert.rejects(f.client.discover());assert.equal(f.client.enabled(),false);await f.client.prefetch();assert.equal(f.counts().permitCalls,0);}finally{f.close();}});
@@ -43,3 +53,36 @@ test('an open-ended credential never claims a session date and an invalid one is
 test('la capacidad que anuncia cantidades por modificador habilita el paso de cantidad',async()=>{const {modifierQuantitiesSupported,setModifierQuantitiesSupported}=await import('../utils/modifierQuantitiesCapability');setModifierQuantitiesSupported(false);const f=fixture({mutate:(d:any)=>({...d,modifierQuantities:1})});try{await f.client.discover();assert.equal(f.client.enabled(),true);assert.equal(modifierQuantitiesSupported(),true);}finally{setModifierQuantitiesSupported(false);f.close();}});
 test('un anuncio de cantidades con forma inválida no habilita nada',async()=>{const {modifierQuantitiesSupported,setModifierQuantitiesSupported}=await import('../utils/modifierQuantitiesCapability');setModifierQuantitiesSupported(false);const f=fixture({mutate:(d:any)=>({...d,modifierQuantities:2})});try{await assert.rejects(f.client.discover(),/PROOF_INVALID/);assert.equal(f.client.enabled(),false);assert.equal(modifierQuantitiesSupported(),false);}finally{f.close();}});
 test('un ERP anterior (sin el campo) sigue habilitando el flujo sin cantidades',async()=>{const {modifierQuantitiesSupported,setModifierQuantitiesSupported}=await import('../utils/modifierQuantitiesCapability');setModifierQuantitiesSupported(false);const f=fixture();try{await f.client.discover();assert.equal(f.client.enabled(),true);assert.equal(modifierQuantitiesSupported(),false);}finally{f.close();}});
+
+test('ordinary builds skip the optional local-signing QA inquiry', async () => {
+ const f = fixture();
+ try {
+  await f.client.discover();
+  assert.equal(f.probeCalls(), 0);
+ } finally { f.close(); }
+});
+
+test('QA observes the terminal preference without awaiting it or minting permits', async () => {
+ const f = fixture({ localSigningProbeEnabled: true, holdProbe: true });
+ try {
+  await f.client.discover();
+  assert.equal(f.client.enabled(), true);
+  assert.equal(f.probeCalls(), 1);
+  assert.equal(f.counts().permitCalls, 0);
+  await f.client.discover();
+  assert.equal(f.probeCalls(), 1);
+ } finally {
+  f.releaseProbe();
+  f.close();
+ }
+});
+
+test('the optional inquiry tolerates an old ERP while legacy discovery and permits work', async () => {
+ const f = fixture({ localSigningProbeEnabled: true, probeStatus: 404 });
+ try {
+  await f.client.discover();
+  await f.client.prefetch();
+  assert.equal(f.probeCalls(), 1);
+  assert.deepEqual(f.counts(), { capCalls: 1, permitCalls: 1 });
+ } finally { f.close(); }
+});
