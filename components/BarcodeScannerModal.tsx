@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { X, Camera, Zap, ZapOff, ScanBarcode } from 'lucide-react';
 import { selectPreferredBackCameraId } from '../utils/cameraSelection';
+import { playScanFeedbackSound, type SalesScanFeedback } from '../utils/scanFeedbackSound';
 
 interface BarcodeScannerModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onScan: (code: string) => Promise<{ success: boolean; message?: string }>;
+    onScan: (code: string) => Promise<{ success: boolean; message?: string; feedback?: SalesScanFeedback }>;
 }
 
 const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClose, onScan }) => {
@@ -14,7 +15,7 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
     const [torchOn, setTorchOn] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
     const lastScanTimeRef = useRef<number>(0);
-    const [feedback, setFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+    const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info', message: string } | null>(null);
 
     const scannerRef = useRef<Html5Qrcode | null>(null);
     const startPromiseRef = useRef<Promise<void> | null>(null);
@@ -24,9 +25,7 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
     // Base64 Beep Sound (Short, high-pitched)
     const BEEP_SOUND = "data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YV9vT18AZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
 
-    const playSound = (type: 'success' | 'error') => {
-        if (type !== 'success') return; // Only beep on success as per request
-
+    const playLegacySuccessSound = () => {
         try {
             const audio = new Audio(BEEP_SOUND);
             audio.volume = 0.5;
@@ -127,19 +126,20 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                     try {
                         const result = await onScan(decodedText);
 
-                        if (result.success) {
-                            playSound('success');
+                        if (result.feedback === 'handled') {
+                            setFeedback({ type: 'info', message: result.message || 'Código leído' });
+                        } else if (result.success) {
+                            if (result.feedback === 'added') playScanFeedbackSound('added');
+                            else playLegacySuccessSound();
                             setFeedback({ type: 'success', message: result.message || 'Producto Agregado' });
-                            // Don't vibrate on success to keep it smooth, or maybe a short tick
                             triggerVibration(50);
                         } else {
-                            playSound('error');
-                            triggerVibration([100, 50, 100]); // Double buzz
+                            if (result.feedback === 'not-found') playScanFeedbackSound('not-found');
+                            triggerVibration([100, 50, 100]);
                             setFeedback({ type: 'error', message: result.message || 'Producto no encontrado' });
                         }
                     } catch (e) {
                         console.error("Scan processing error", e);
-                        playSound('error');
                     }
 
                     // Clear feedback after 2s
@@ -288,9 +288,9 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
 
                 {/* Feedback Toast */}
                 {feedback && (
-                    <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full shadow-2xl font-bold text-white flex items-center gap-2 animate-in zoom-in-90 ${feedback.type === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`}>
-                        {feedback.type === 'success' ? <Camera size={20} /> : <ZapOff size={20} />}
-                        {feedback.message}
+                    <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full shadow-2xl font-bold text-white flex items-center gap-2 animate-in zoom-in-90 ${feedback.type === 'success' ? 'bg-emerald-500' : feedback.type === 'info' ? 'bg-slate-700' : 'bg-red-500'}`}>
+                        {feedback.type === 'error' ? <ZapOff size={20} /> : <Camera size={20} />}
+                        <span role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.message}</span>
                     </div>
                 )}
 
