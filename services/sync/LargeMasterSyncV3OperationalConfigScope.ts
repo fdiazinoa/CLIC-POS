@@ -3,7 +3,7 @@ import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 type Selector = { localTerminalId?: string; terminalId?: string; deviceId?: string; tenantId?: string };
 /** The complete immutable authority scope; presentation metadata is intentionally retained. */
-export function v3OperationalConfigContext(config: BusinessConfig, selector: Selector) {
+export function v3OperationalConfigContext(config: Pick<BusinessConfig, 'terminals'>, selector: Selector) {
   const matches = config?.terminals?.filter(row =>
     (selector.localTerminalId === undefined || row.id === selector.localTerminalId)
     && (selector.terminalId === undefined || (row.config.erpTerminalId || row.id) === selector.terminalId)

@@ -892,16 +892,51 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         ...(Number(state.contract_version) >= 2 ? { contractVersion: Number(state.contract_version) } : {}) } : null;
   }
 
-  async readOperationalSnapshot(runtime: LargeMasterSyncV3RuntimeVersion) {
+  async readOperationalSnapshot(runtime: LargeMasterSyncV3RuntimeVersion, includeCartConfig = false) {
     requireOperationalVersion(runtime);
-    const row = first(await this.connection().query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
-      SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
+    const snapshot = `SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
         o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor
       FROM master_v3_state s
       LEFT JOIN master_v3_operational_owner o ON o.singleton = 1
       LEFT JOIN inventory i ON 1 = 1
-      WHERE s.singleton = 1`, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
+      WHERE s.singleton = 1`;
+    // A single read projects terminal authority fields and the current snapshot from the same SQLite view.
+    // Leave sibling documents, malformed JSON and large projections to the ordinary config reader.
+    const cartAuthority = `, snapshot AS (${snapshot}), cart_config AS MATERIALIZED (
+      SELECT CASE WHEN json_valid(doc.data) THEN CASE
+        WHEN json_extract(doc.data, '$.id') = 'current' AND json_type(doc.data, '$.terminals') = 'array'
+        THEN (
+          SELECT CASE WHEN count(*) = count(CASE WHEN json_type(value, '$.config') = 'object' THEN 1 END)
+            THEN json_group_array(json_object(
+              'id', value -> '$.id',
+              'config', json_object(
+                'erpTerminalId', value -> '$.config.erpTerminalId',
+                'currentDeviceId', value -> '$.config.currentDeviceId',
+                'erpBinding', value -> '$.config.erpBinding',
+                'inventoryScope', value -> '$.config.inventoryScope',
+                'pricing', value -> '$.config.pricing',
+                'fiscal', value -> '$.config.fiscal'
+              )
+            )) END
+          FROM (SELECT CASE WHEN terminal.type = 'object' THEN terminal.value END AS value
+                FROM json_each(doc.data, '$.terminals') terminal)
+        )
+        END END AS terminals
+      FROM documents doc
+      WHERE doc.collection_name = 'config' AND doc.doc_id = 'current'
+        AND NOT EXISTS (
+          SELECT 1 FROM documents sibling
+          WHERE sibling.collection_name = 'config' AND sibling.doc_id <> doc.doc_id
+        )
+    )
+    SELECT snapshot.*, CASE WHEN length(cart_config.terminals) <= 65536 THEN cart_config.terminals END AS config_terminals
+      FROM (SELECT 1)
+      LEFT JOIN snapshot ON 1 = 1 LEFT JOIN cart_config ON 1 = 1`;
+    const statement = `WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})${includeCartConfig ? cartAuthority : ' ' + snapshot}`;
+    const row = first(await this.connection().query(statement, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
     return {
+      ...(includeCartConfig ? { configTerminals: typeof row?.config_terminals === 'string'
+        ? JSON.parse(row.config_terminals) as import('../../types').BusinessConfig['terminals'] : null } : {}),
       active: row?.active_sync_id && row.active_version != null
         ? { syncId: String(row.active_sync_id), syncVersion: Number(row.active_version) } : null,
       inventory: row?.inventory_version != null

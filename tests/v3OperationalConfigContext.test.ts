@@ -34,6 +34,53 @@ test('shared fingerprint retains complete metadata and rejects missing/ambiguous
   assert.throws(() => v3OperationalConfigContext(config, { localTerminalId: 'T' }), /BINDING_CHANGED/);
 });
 
+test('cart authority uses one SQLite query per check and sees fresh scope, inventory and owner', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.getLargeMasterSyncV3OperationalSession();
+    const writes = f.fault.writes;
+    let reads = f.fault.queries;
+    await session.assertCurrent(true);
+    assert.equal(f.fault.queries - reads, 1);
+    reads = f.fault.queries;
+    await session.assertCurrent(true);
+    assert.equal(f.fault.queries - reads, 1);
+
+    const changed = structuredClone(f.env.config);
+    changed.terminals[0].config.pricing.defaultTariffId = id(999);
+    const updateConfig = f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'");
+    updateConfig.run(JSON.stringify(changed));
+    await assert.rejects(session.assertCurrent(true), /BINDING_CHANGED/);
+    updateConfig.run(JSON.stringify(f.env.config));
+    f.db.prepare("UPDATE master_v3_inventory_state SET cursor='different'").run();
+    await assert.rejects(session.assertCurrent(true), /RUNTIME_VERSION_CHANGED/);
+    f.db.prepare("UPDATE master_v3_inventory_state SET cursor='inventory-cursor'").run();
+    f.db.prepare("UPDATE master_v3_operational_owner SET binding='different'").run();
+    await assert.rejects(session.assertCurrent(true), /RUNTIME_VERSION_CHANGED/);
+    assert.equal(f.fault.writes, writes);
+  } finally { f.close(); }
+});
+
+test('cart authority preserves the legacy reader for sibling and oversized config', async () => {
+  const f = await fixture();
+  try {
+    const session = await f.module.getLargeMasterSyncV3OperationalSession();
+    const insert = f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)');
+    insert.run('config', 'config_metadata', JSON.stringify({ id: 'config_metadata' }), 0, 'fixture');
+    let reads = f.fault.queries;
+    await session.assertCurrent(true);
+    assert.ok(f.fault.queries - reads > 1);
+    f.db.prepare("DELETE FROM documents WHERE collection_name='config' AND doc_id='config_metadata'").run();
+
+    const config = structuredClone(f.env.config);
+    config.terminals[0].config.inventoryScope.extraMetadata = 'x'.repeat(65536);
+    f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(config));
+    reads = f.fault.queries;
+    await assert.rejects(session.assertCurrent(true), /BINDING_CHANGED/);
+    assert.ok(f.fault.queries - reads > 1);
+  } finally { f.close(); }
+});
+
 test('actual native session renews normalized metadata once; old session rejects, no downloads or financial writes', async () => {
   const f = await fixture(); try {
     const old = await f.module.getLargeMasterSyncV3OperationalSession();

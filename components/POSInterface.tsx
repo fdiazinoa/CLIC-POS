@@ -272,7 +272,7 @@ export interface V3OperationalPOSBoundary {
    categories?: readonly V3OperationalCategory[];
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
-   validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference, forCartAdd?: boolean): Promise<void>;
    completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
    restoreReservation?(id: string): Promise<V3RecoveredReservation>;
@@ -3802,7 +3802,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
          if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData) {
-            try { await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); } catch (error: any) {
+            try { await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }, true); } catch (error: any) {
             if (String(error?.message || '').includes('SYNC_V3_WAREHOUSE_UNAVAILABLE')) { openWarehousePrompt(product); return false; }
             throw error;
          }

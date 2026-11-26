@@ -42,6 +42,8 @@ test('supermarket ticket exposes the selected line for keyboard and touch editin
   assert.match(table, /tabIndex=\{0\}/);
   assert.match(table, /aria-label=\{`Editar \$\{item\.name\}, cantidad \$\{item\.quantity\}`\}/);
   assert.doesNotMatch(table, /opacity-0 group-hover:opacity-100/);
+  assert.doesNotMatch(table, /setHighlightedId|setTimeout|bg-blue-50\/80/);
+  assert.match(table, /containerRef.current.scrollTop = 0/);
 });
 
 test('the supermarket row opens the existing permission-aware editor using the canonical cart line', () => {
