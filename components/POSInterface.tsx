@@ -272,6 +272,7 @@ export interface V3OperationalPOSBoundary {
    categories?: readonly V3OperationalCategory[];
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
+   canAddCatalogItem?(): boolean;
    validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
    completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
@@ -3789,10 +3790,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [isReturnMode]);
 
    const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+      if (v3Operational?.canAddCatalogItem?.() === false) return false;
       if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) return false;
       if(product.inventoryPresentationMaster){const {inventoryPresentationMaster:_overlay,...source}=product;product=source;}
       const mounted = uiLifetime.current.capture();
-      const isCurrent = () => mounted() && addContext.current === v3Operational;
+      const isCurrent = () => mounted() && addContext.current === v3Operational
+         && v3Operational?.canAddCatalogItem?.() !== false;
       const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
@@ -3943,8 +3946,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) { setFormatSelection(null); return false; }
       if (!articleFormatsEnabled) { setErrorToast('Presentaciones pendientes de habilitación'); return false; }
       const context = v3Operational;
+      if (context?.canAddCatalogItem?.() === false) return false;
       const mounted = uiLifetime.current.capture();
-      const isCurrent = () => mounted() && addContext.current === context;
+      const isCurrent = () => mounted() && addContext.current === context
+         && context?.canAddCatalogItem?.() !== false;
       const operation = async () => {
          try {
             if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return false;
@@ -4021,7 +4026,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleProductClick = useCallback((product: Product) => {
       if (rejectFormatQuickReturn(product)) return;
-      if (Date.now() < suppressProductInputUntilMs) return;
+      if (Date.now() < suppressProductInputUntilMs || v3Operational?.canAddCatalogItem?.() === false) return;
       // MOBILE INTERCEPTION
       if (isMobileViewport && !defaultSalesWarehouseId) {
          setPendingProductToAdd(product);
