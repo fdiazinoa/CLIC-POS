@@ -154,6 +154,8 @@ export interface DatabaseAdapter {
     readOfflineFiscalAuthorityConfig?(): Promise<Pick<import('../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null>;
     getDocumentsByIds?<T>(collectionName: string, ids: readonly string[]): Promise<T[]>;
     deleteDocument(collectionName: string, id: string): Promise<void>;
+    /** Raw persisted config fields needed by the automatic fiscal-status reader. */
+    readFiscalStatusConfig?(terminalId: string, deviceId: string): Promise<unknown>;
 
     // Raw Query (for SQLite specific optimizations later)
     executeSQL?(query: string, params?: any[]): Promise<any>;

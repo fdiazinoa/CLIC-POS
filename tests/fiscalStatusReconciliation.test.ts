@@ -57,6 +57,65 @@ async function native(caja6=false){
  return{...f,sql,adapter,read,deps,worker:new FiscalStatusReconciler(deps),counts:()=>({gets,publishes}),setNow:(value:number)=>now=value,setValid:(value:boolean)=>valid=value};
 }
 
+test('native fiscal status projection preserves environment precedence and exact terminal matches', async () => {
+  const f = await native();
+  try {
+    const config = f.read('config');
+    const [terminal] = config.terminals;
+    terminal.config.fiscal = { providerId: 'MSELLER', environment: 2 };
+    config.fiscalCompliance.providers[0].environment = 1;
+    config.products = [{ id: 'unused' }];
+    config.terminals.push(
+      { ...terminal, id: terminal.id.toUpperCase() },
+      { ...terminal, config: { ...terminal.config, currentDeviceId: 'DEVICE' } }
+    );
+    const save = () => f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config'").run(JSON.stringify(config));
+    const scopes = [
+      [{}, 2],
+      [{ fiscalMode: 'ECF', resolved: { fiscal: { mode: 'LEGACY_B' } } }, 2],
+      [{ fiscal_mode: 'LEGACY_B' }, 1],
+      [{ resolved: { terminalFiscalConfig: { mode: 'LEGACY_B' } } }, 1],
+      [{ resolved: { terminal_fiscal_config: { mode: 'LEGACY_B' } } }, 1],
+      [{ resolved: { fiscal: { mode: 'LEGACY_B' } } }, 1],
+      [{ config: { fiscal: { mode: 'LEGACY_B' } } }, 1],
+      [{ terminal: { config: { fiscal: { mode: 'LEGACY_B' } } } }, 1],
+      [{ terminal: { fiscal: { mode: 'LEGACY_B' } } }, 1]
+    ] as const;
+    for (const [snapshot, environment] of scopes) {
+      terminal.config.erpSnapshot = { ...snapshot, masters: { items: [{ id: 'unused' }] } };
+      save();
+      const projected: any = await f.adapter.readFiscalStatusConfig(terminal.id, f.scope.deviceId);
+      assert.equal(projected.companyInfo.rnc, config.companyInfo.rnc);
+      assert.equal(projected.terminals.length, 1);
+      assert.deepEqual(projected.terminals[0].config.erpBinding, terminal.config.erpBinding);
+      for (const [root, fiscal] of [[projected, projected.terminals[0].config], [config, terminal.config]]) {
+        assert.equal(getProviderEnvironment(getEffectiveFiscalComplianceConfig(root, fiscal), 'MSELLER'), environment);
+      }
+      assert.equal(projected.products, undefined);
+      assert.equal(projected.terminals[0].config.erpSnapshot.masters, undefined);
+    }
+    config.terminals.push(terminal);
+    save();
+    const duplicate: any = await f.adapter.readFiscalStatusConfig(terminal.id, f.scope.deviceId);
+    assert.equal(duplicate.terminals.length, 2);
+  } finally { f.sql.close(); }
+});
+
+test('native fiscal status projection keeps the full decoder for legacy and malformed configurations', async () => {
+  const f = await native();
+  try {
+    const config = { ...f.read('config'), id: 'legacy', products: [{ id: 'retained' }] };
+    f.sql.prepare("UPDATE documents SET doc_id='legacy', data=? WHERE collection_name='config'").run(JSON.stringify(config));
+    const read = () => f.adapter.readFiscalStatusConfig(f.scope.terminalId, f.scope.deviceId);
+    assert.deepEqual(await read(), await f.adapter.getCollection('config'));
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data) VALUES('config','current',?)")
+      .run(JSON.stringify({ ...config, id: 'current' }));
+    assert.deepEqual(await read(), await f.adapter.getCollection('config'));
+    f.sql.exec("UPDATE documents SET data='malformed' WHERE collection_name='config' AND doc_id='legacy'");
+    await assert.rejects(read, SyntaxError);
+  } finally { f.sql.close(); }
+});
+
 test('actual native S2/S1 status CAS accepts only proof, preserves independent protected copies/source/NCF/payments/outbox, publishes after both commit, late ACK cannot regress',async()=>{
  const f=await native();try{
   const beforeTx=f.read('transactions'),beforeHistory=f.read('transactionHistory');
@@ -572,7 +631,7 @@ async function actualAppStatusContext(f:any,state:any){
  const configStart=source.indexOf('const resolvePersistedBusinessConfig ='),configEnd=source.indexOf('const normalizeTerminalDocumentAssignments =',configStart);
  const configCode=(await transform(source.slice(configStart,configEnd),{loader:'ts'})).code;
  const deps={db:{get:async()=>f.read('config')},dbAdapter:state.adapter,
-  getLargeMasterSyncV3RetainedSession:async()=>{throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:async()=>{state.opens++;throw Error('FORBIDDEN_BOOTSTRAP_POST');},
+  getLargeMasterSyncV3RetainedSession:async()=>{if(state.retainedSession)return state.retainedSession;throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:async()=>{state.opens++;throw Error('FORBIDDEN_BOOTSTRAP_POST');},
   captureFiscalStatusBoundContext:()=>captureFiscalStatusBoundContext(()=>f.identity,()=>f.credentials),
   readLargeMasterSyncV3BoundIdentity:()=>f.identity,largeMasterSyncV3DownloadOrigin:()=>state.origin,
   assertLargeMasterSyncV3NativeAndroid:()=>{if(!state.native)throw Error('SYNC_V3_NATIVE_ANDROID_REQUIRED');},
@@ -649,6 +708,32 @@ test('App context keeps the existing operational-session default for automatic/o
   await assert.rejects(()=>f.deps.context(),/FORBIDDEN_BOOTSTRAP_POST/);assert.equal(f.state.opens,1);
   await assert.rejects(()=>f.deps.context(false),/FORBIDDEN_BOOTSTRAP_POST/);assert.equal(f.state.opens,2);f.unchanged();
  }finally{f.sql.close();}
+});
+
+test('automatic App context rechecks freshly persisted fiscal scope through the native projection', async () => {
+  const f = await manualFixture();
+  try {
+    let sessionChecks = 0;
+    let projectionReads = 0;
+    f.state.retainedSession = {
+      binding: f.scope.binding,
+      ready: { runtime: { version: { syncId: 'S2', syncVersion: 2 } } },
+      assertCurrent: async () => { sessionChecks++; }
+    };
+    f.state.adapter.readFiscalStatusConfig = (terminalId: string, deviceId: string) => {
+      projectionReads++;
+      return f.adapter.readFiscalStatusConfig(terminalId, deviceId);
+    };
+    const context = await f.deps.context(false);
+    assert.equal(context.scope.environment, 0);
+    const config = f.read('config');
+    config.fiscalCompliance.providers[0].environment = 2;
+    f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config'").run(JSON.stringify(config));
+    await assert.rejects(context.assertCurrent(), /FISCAL_STATUS_SCOPE_CHANGED/);
+    assert.equal(sessionChecks, 2);
+    assert.equal(projectionReads, 2);
+    assert.deepEqual(f.requests, []);
+  } finally { f.sql.close(); }
 });
 
 for(const change of ['config','owner','runtime'] as const)test(`real App context ${change} change after source read blocks the status request`,async()=>{

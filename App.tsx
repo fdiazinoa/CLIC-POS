@@ -11173,9 +11173,16 @@ const AppContent: React.FC = () => {
     }
     const session = await getLargeMasterSyncV3RetainedSession();
     await session.assertCurrent();
-    const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
-    if (!persisted || !dbAdapter.supportsV3FiscalMetadataCAS) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
     const identity = JSON.parse(session.binding);
+    const canProjectConfig = Array.isArray(identity)
+      && typeof identity[1] === 'string' && Boolean(identity[1])
+      && typeof identity[2] === 'string' && Boolean(identity[2]);
+    const readStatusConfig = async () => resolvePersistedBusinessConfig(
+      await ((canProjectConfig ? dbAdapter.readFiscalStatusConfig?.(identity[1], identity[2]) : undefined)
+        ?? db.get('config'))
+    );
+    const persisted = await readStatusConfig();
+    if (!persisted || !dbAdapter.supportsV3FiscalMetadataCAS) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
     const matches = (persisted.terminals || []).filter(terminal => terminal.id === identity[1] && terminal.config?.currentDeviceId === identity[2]);
     const terminal = matches[0], binding = terminal?.config?.erpBinding;
     if (matches.length !== 1 || binding?.tenantId !== identity[0] || !binding?.companyId || !binding?.storeId) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
@@ -11185,7 +11192,7 @@ const AppContent: React.FC = () => {
       tenantId:binding.tenantId,companyId:binding.companyId,terminalId:terminal.id,deviceId:identity[2],storeId:binding.storeId,binding:session.binding },
       catalog:{...session.ready.runtime.version,binding:session.binding},assertCurrent:async()=> {
         await session.assertCurrent();
-        const fresh = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+        const fresh = await readStatusConfig();
         const current = fresh?.terminals?.filter(row=>row.id===terminal.id && row.config?.currentDeviceId===identity[2]);
         if (current?.length!==1 || current[0].config?.erpBinding?.tenantId!==binding.tenantId
           || current[0].config?.erpBinding?.companyId!==binding.companyId || current[0].config?.erpBinding?.storeId!==binding.storeId

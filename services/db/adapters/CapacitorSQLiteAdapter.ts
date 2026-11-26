@@ -564,6 +564,66 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
     }
 
+    readFiscalStatusConfig(terminalId: string, deviceId: string): Promise<unknown> {
+        return this.withWriteLock(() => measureSettingsReturnQa('sqlite.lane.read.fiscalStatusConfig', async () => {
+            // Keep all exact matches so the caller can still reject duplicate terminals.
+            // Mirror the snapshot paths read by resolveTerminalFiscalMode.
+            // Fall back to the full collection decoder when the canonical layout is ambiguous.
+            const result = await this.ensureDb().query(`
+                SELECT CASE WHEN json_valid(doc.data) THEN CASE
+                    WHEN doc.data ->> '$.id' = 'current'
+                    AND json_type(doc.data, '$.terminals') = 'array'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM json_each(doc.data, '$.terminals') AS terminal
+                        WHERE CASE WHEN terminal.type = 'object' THEN json_type(terminal.value, '$.config') END IS NOT 'object'
+                    )
+                    THEN json_object(
+                        'companyInfo', json_object('rnc', doc.data -> '$.companyInfo.rnc'),
+                        'fiscalCompliance', doc.data -> '$.fiscalCompliance',
+                        'terminals', json((SELECT json_group_array(json_object(
+                            'id', terminal.value -> '$.id',
+                            'config', json_object(
+                                'currentDeviceId', terminal.value -> '$.config.currentDeviceId',
+                                'erpBinding', json_object(
+                                    'tenantId', terminal.value -> '$.config.erpBinding.tenantId',
+                                    'companyId', terminal.value -> '$.config.erpBinding.companyId',
+                                    'storeId', terminal.value -> '$.config.erpBinding.storeId'
+                                ),
+                                'fiscal', terminal.value -> '$.config.fiscal',
+                                'erpSnapshot', json_object(
+                                    'fiscalMode', terminal.value -> '$.config.erpSnapshot.fiscalMode',
+                                    'fiscal_mode', terminal.value -> '$.config.erpSnapshot.fiscal_mode',
+                                    'resolved', json_object(
+                                        'terminalFiscalConfig', terminal.value -> '$.config.erpSnapshot.resolved.terminalFiscalConfig',
+                                        'terminal_fiscal_config', terminal.value -> '$.config.erpSnapshot.resolved.terminal_fiscal_config',
+                                        'fiscal', terminal.value -> '$.config.erpSnapshot.resolved.fiscal'
+                                    ),
+                                    'config', json_object('fiscal', terminal.value -> '$.config.erpSnapshot.config.fiscal'),
+                                    'terminal', json_object(
+                                        'fiscal', terminal.value -> '$.config.erpSnapshot.terminal.fiscal',
+                                        'config', json_object('fiscal', terminal.value -> '$.config.erpSnapshot.terminal.config.fiscal')
+                                    )
+                                )
+                            )
+                        )) FROM json_each(doc.data, '$.terminals') AS terminal
+                            WHERE json_type(terminal.value, '$.id') = 'text'
+                            AND terminal.value ->> '$.id' COLLATE BINARY = ?
+                            AND json_type(terminal.value, '$.config.currentDeviceId') = 'text'
+                            AND terminal.value ->> '$.config.currentDeviceId' COLLATE BINARY = ?))
+                    )
+                END END AS data
+                FROM documents AS doc
+                WHERE doc.collection_name = 'config' AND doc.doc_id = 'current'
+                AND NOT EXISTS (
+                    SELECT 1 FROM documents AS sibling
+                    WHERE sibling.collection_name = doc.collection_name AND sibling.doc_id <> doc.doc_id
+                )`, [terminalId, deviceId]);
+            const projected = result.values?.[0]?.data;
+            if (typeof projected === 'string') return JSON.parse(projected);
+            return this.fromStoredDocuments('config', await this.readStoredDocuments('config'));
+        }));
+    }
+
     readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
         return this.withWriteLock(async () => {
             // Preserve the persisted RNC and terminal JSON types while avoiding unrelated config data.
