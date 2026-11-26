@@ -98,7 +98,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  async offlineReadiness():Promise<{reason:string;code?:string;remaining?:Record<string,number>}>{
   try{const local=await readOfflineAuthority(),native=store(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));
    if(current?.allocation&&current.phase==='EFFECT_POSSIBLE'){await native?.allocationDraft?.(current);return {reason:'READY_ALLOCATION'};}
-   const allocation=await native?.allocationAvailability?.(local);if(allocation)return {reason:Object.values(allocation.remaining).some(n=>n>0)?'READY_ALLOCATION':'FISCAL_RANGE_EXHAUSTED',remaining:allocation.remaining};
+   const allocation=await measureSettingsReturnQa('fiscal.offlineReadinessAvailability', async () => native?.allocationAvailability?.(local));if(allocation)return {reason:Object.values(allocation.remaining).some(n=>n>0)?'READY_ALLOCATION':'FISCAL_RANGE_EXHAUSTED',remaining:allocation.remaining};
    if(await native?.offlineLease?.(local))return {reason:'READY_V1'};
    const leaseReason=await native?.offlineLeaseReason?.(local);if(leaseReason&&leaseReason!=='MISSING_AUTHORIZATION')return {reason:leaseReason};const preparationError=leasePreparationError||allocationPreparationError;
    return preparationError?{reason:/DISABLED/.test(preparationError)?'PREPARATION_DISABLED':'PREPARATION_FAILED',code:preparationError}:{reason:'MISSING_AUTHORIZATION'};

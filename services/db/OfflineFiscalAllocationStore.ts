@@ -143,12 +143,12 @@ async function canRestoreRetainedBlockMarker(
 
  return await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix)===buffer.currentNumber;
 }
-export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
+export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string,checkedConfig?:BusinessConfig){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
  if(!members.length)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let expired=false;
- const config=await document<BusinessConfig>(sql,'config','current');
+ const config=checkedConfig ?? await document<BusinessConfig>(sql,'config','current');
  for(const member of members){try{assertAllocationMemberTime(member,time);}catch{expired=true;continue;}
   const documents = (await measureSettingsReturnQa('fiscal.allocationMemberRead', () => sql.query(`
     SELECT collection_name, doc_id, data FROM documents WHERE collection_name='fiscalAllocations' AND doc_id=?
@@ -318,9 +318,13 @@ export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowChe
 export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAuthority,type?:string){
  const proof=await readAllocation(sql,local);if(!proof)return null;
  const remaining:Record<string,number>={},total:Record<string,number>={};let lastError:unknown;
- for(const member of proof.authority.allocations.filter(m=>!type||m.ncfType===type)){
+ const members = proof.authority.allocations.filter(member => !type || member.ncfType === type);
+ // The caller holds the native transaction for the entire scan. Use the same config for each member.
+ const config = members.length ? await measureSettingsReturnQa('fiscal.allocationAvailabilityConfig',
+  () => document<BusinessConfig>(sql,'config','current')) : undefined;
+ for(const member of members){
   try{
-   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);
+   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId,config);
    if(planned.restoreRetainedBlockMarker){
     await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],
      planned.config,planned.buffer,planned.selection.ncf,{requireIssuer:true});
