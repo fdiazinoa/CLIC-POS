@@ -1846,7 +1846,9 @@ export const mergeCatalogDeltaIntoSnapshot = (
 const resolveTerminalTemplate = (config: BusinessConfig, terminalId: string): TerminalConfig => {
   const existing = (config.terminals || []).find((terminal) => terminal.id === terminalId)?.config;
   const first = (config.terminals || [])[0]?.config;
-  return cloneDeep(existing || first || DEFAULT_TERMINAL_CONFIG);
+  const template: TerminalConfig = cloneDeep(existing || first || DEFAULT_TERMINAL_CONFIG);
+  if (!existing) delete template.msellerRealtimePrintEnabled;
+  return template;
 };
 
 type SnapshotSource = 'resolved' | 'fallback_config' | 'cached_snapshot' | 'existing_config';

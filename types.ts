@@ -651,6 +651,7 @@ export interface NCFConfig {
 }
 
 export interface TerminalConfig {
+  msellerRealtimePrintEnabled?: boolean;
   articleFormatCapabilities?: { article_formats?: number; article_formats_return_context?: number };
   currentDeviceId?: string;
   lastPairingDate?: string;
