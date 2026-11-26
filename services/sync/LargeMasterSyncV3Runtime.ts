@@ -84,7 +84,7 @@ export class LargeMasterSyncV3Runtime {
     return this.store.getInventorySnapshotVersion(this.version);
   }
 
-  getOperationalSupports(itemIds: string[], warehouseId: string) {
-    return this.store.getOperationalSupports?.(this.version, itemIds, warehouseId);
+  getOperationalSupports(itemIds: string[], warehouseId: string, checkInventory = false) {
+    return this.store.getOperationalSupports?.(this.version, itemIds, warehouseId, checkInventory);
   }
 }
