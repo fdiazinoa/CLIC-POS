@@ -27,6 +27,7 @@ import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/loca
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
+import { V3_SALES_CONFIG_PUBLISHED } from './services/sync/LargeMasterSyncV3ConfigPublication';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
 import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation,readV3CommittedLegacySaleReplay } from './services/sync/LargeMasterSyncV3FinancialCommit';
@@ -8678,12 +8679,32 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('v3CatalogUpdated', applyV3CatalogConfig);
   }, [config]);
 
+  const renderedConfig = useRef(config);
+  renderedConfig.current = config;
+  const salesConfigPublicationRevision = useRef(0);
+  const publishedSalesConfigs = useRef(new WeakMap<BusinessConfig, { previous: BusinessConfig; revision: number }>());
+  useEffect(() => {
+    const adoptPersistedAuthority = (event: Event) => {
+      const next = (event as CustomEvent<BusinessConfig>).detail;
+      if (next && usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
+        const revision = ++salesConfigPublicationRevision.current;
+        publishedSalesConfigs.current.set(next, { previous: renderedConfig.current, revision });
+        setConfig(next);
+      }
+    };
+    window.addEventListener(V3_SALES_CONFIG_PUBLISHED, adoptPersistedAuthority);
+    return () => window.removeEventListener(V3_SALES_CONFIG_PUBLISHED, adoptPersistedAuthority);
+  }, []);
+
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
       freezePhase('CONFIG_EVENT_ENTER');
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
+      const published = publishedSalesConfigs.current.get(incomingConfig);
+      const salesConfigRevision = published?.revision ?? salesConfigPublicationRevision.current;
       await waitForBackgroundSyncWindow();
+      if (salesConfigRevision !== salesConfigPublicationRevision.current) return;
       freezePhase('CONFIG_EVENT_WINDOW_READY');
 
       // Detect if we actually need a full sync re-init
@@ -8702,7 +8723,7 @@ const AppContent: React.FC = () => {
         };
       };
 
-      const oldConfigJson = JSON.stringify(sanitize(config));
+      const oldConfigJson = JSON.stringify(sanitize(published?.previous ?? config));
       const newConfigJson = JSON.stringify(sanitize(incomingConfig));
       freezePhase('CONFIG_EVENT_COMPARED');
       const hasSubstantialChanges = oldConfigJson !== newConfigJson;

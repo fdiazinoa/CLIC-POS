@@ -1,3 +1,4 @@
+import { acknowledgeV3SalesConfig, isV3SalesConfigPending, subscribeV3SalesConfigPublication } from '../services/sync/LargeMasterSyncV3ConfigPublication';
 import { markSettingsReturnQa, markSettingsReturnV3Failure, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import { TERMINAL_SESSION_RENEWED_EVENT } from '../services/sync/OperationalTerminalConfig';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
@@ -9,7 +10,7 @@ import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import { planV3CartReanchor } from '../services/sync/LargeMasterSyncV3CartReanchor';
 import type { BusinessConfig, Product } from '../types';
@@ -125,6 +126,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       observedContextKey.current = wantedContextKey;
     }
   }, [wantedContextKey]);
+  const terminalId = props.activeTerminalId || '';
+  const configPublishing = useSyncExternalStore(subscribeV3SalesConfigPublication,
+    () => isV3SalesConfigPending(terminalId, configScope), () => false);
+  useEffect(() => {
+    if (!configPublishing) acknowledgeV3SalesConfig(terminalId, configScope);
+  }, [configPublishing, terminalId, configScope]);
   const latestContextKey = useRef(wantedContextKey);
   latestContextKey.current = authorityError ? '' : wantedContextKey;
   const [loadedContextKey, setLoadedContextKey] = useState('');
@@ -212,6 +219,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     tariffId,
     liveInventory: pinnedSource.liveInventory,
     categories,
+    canAddCatalogItem: () => isCurrent() && !isV3SalesConfigPending(terminalId, configScope),
     search: async (query, categoryId, categoryKeys) => {
       // Retired reads cannot change catalog state or surface stale errors.
       if (!isCurrent()) return;
@@ -296,7 +304,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       latestContextKey.current = '';
       setSelection({ ...authority, tariffId: id, mode: 'manual' });
     },
-  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError, presentation, catalogRevision, resumePending]);
+  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError, presentation, catalogRevision, resumePending, terminalId, configScope]);
 
   useEffect(() => {
     if (!boundary || !props.cart.length) return;
@@ -365,6 +373,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     return { tariffId: lastBoundary.current?.tariffId || tariffId,
       categories: lastBoundary.current?.categories || categories,
       // Read searches wait for the replacement boundary; mutations still reject.
+      canAddCatalogItem: () => false,
       search: async () => {}, resolveCode: rejectAsync, validate: rejectAsync, changeTariff: reject,
       completedReservation: rejectAsync, expireReservation: rejectAsync, restoreReservation: rejectAsync,
       restoreRetainedTicket: rejectAsync, updateRetainedTicket: rejectAsync, waitingTickets: rejectAsync };
@@ -375,12 +384,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     <button type="button" onClick={() => props.onOpenSettings()} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
       Abrir ajustes
     </button>
-  </div> : !boundary ? <div role="status" className="p-6">
+  </div> : configPublishing ? <div role="status" className="p-6">Actualizando configuración de Ventas…</div> : !boundary ? <div role="status" className="p-6">
     {checkingRetainedCatalog ? 'Verificando catálogo e inventario…' : 'Preparando catálogo V3 e inventario del dispositivo vinculado…'}
   </div> : null;
   if (!projected || (completingSettingsReturn && (!boundary || failure))) return notice;
   return <>{notice}<POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
-    v3Operational={failure ? blockedBoundary : boundary || blockedBoundary} catalogSearchProducts={visible}
+    v3Operational={failure ? blockedBoundary : boundary || blockedBoundary} catalogSearchProducts={configPublishing ? [] : visible}
     readCartItemErpAvailableStock={readCartItemErpAvailableStock}
     catalogArticleDiagnostics={articleDiagnostics}
     onUpdateProducts={() => { throw new Error('SYNC_V3_LOCAL_CATALOG_EDIT_UNSUPPORTED'); }}

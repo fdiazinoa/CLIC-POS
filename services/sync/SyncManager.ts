@@ -24,6 +24,7 @@ import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTran
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
 import { v3ErpStockDisplay, v3ErpStockDisplayScope } from './LargeMasterSyncV3ErpStockDisplay';
+import { publishV3SalesConfig } from './LargeMasterSyncV3ConfigPublication';
 import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
 import { v3BindingKey } from './LargeMasterSyncV3BindingKey';
 import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
@@ -4081,30 +4082,38 @@ class SyncManager {
             JSON.stringify(this.sanitizeConfig(configForTerminalSnapshot)) !==
             JSON.stringify(this.sanitizeConfig(nextConfig));
 
-        if (options?.persist !== false && changed) {
-            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
-            await db.save('config', nextConfig);
-        }
-
-        if (nextRuntimeWarehouses.length > 0) {
-            const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
-            const persistedJson = JSON.stringify(persistedWarehouses);
-            const nextJson = JSON.stringify(nextRuntimeWarehouses);
-
-            if (persistedJson !== nextJson) {
-                await db.save('warehouses', nextRuntimeWarehouses);
-                window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+        const persistResolvedAuthority = async () => {
+            if (options?.persist !== false && changed) {
+                if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+                await db.save('config', nextConfig);
             }
+
+            if (nextRuntimeWarehouses.length > 0) {
+                const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
+                const persistedJson = JSON.stringify(persistedWarehouses);
+                const nextJson = JSON.stringify(nextRuntimeWarehouses);
+
+                if (persistedJson !== nextJson) {
+                    await db.save('warehouses', nextRuntimeWarehouses);
+                    window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+                }
+            }
+
+            await db.rehydrateOperationalDocumentState(
+                operationalDocumentState.documentSeries,
+                operationalDocumentState.fiscalRanges,
+                operationalDocumentState.fiscalAllocations,
+                operationalDocumentState.terminalId,
+            );
+
+            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+
+        };
+        if (v3Authority && changed && options?.persist !== false && options?.dispatchEvent !== false) {
+            await publishV3SalesConfig(applied.terminalId, configForTerminalSnapshot, nextConfig, persistResolvedAuthority);
+        } else {
+            await persistResolvedAuthority();
         }
-
-        await db.rehydrateOperationalDocumentState(
-            operationalDocumentState.documentSeries,
-            operationalDocumentState.fiscalRanges,
-            operationalDocumentState.fiscalAllocations,
-            operationalDocumentState.terminalId,
-        );
-
-        if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
 
         window.dispatchEvent(new CustomEvent('terminalFiscalDocumentsUpdated', {
             detail: { terminalId: operationalDocumentState.terminalId },
