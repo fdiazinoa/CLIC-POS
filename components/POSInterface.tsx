@@ -134,6 +134,7 @@ import ProductTableSupermarket from './ProductTableSupermarket';
 import SupermarketTicketSummary from './SupermarketTicketSummary';
 import { FiscalStatusBadge, SyncStatusBadge, TicketStatusControls, TicketTotalStatusRow } from './POSStatusIndicators';
 import BarcodeScannerModal from './BarcodeScannerModal';
+import { playScanFeedbackSound, type SalesScanFeedback } from '../utils/scanFeedbackSound';
 import { printCashMovementReceipt, printComanda, printPrecuenta } from '../utils/printer';
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
 import ModifierModal from './ModifierModal';
@@ -3821,7 +3822,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const usesSerial = product.operationalFlags?.usesSerial;
       if ((usesLots || usesSerial) && !trackingData) {
          setPendingTrackingProduct({ product, quantity, price: priceOverride, modifiers,selectedVariant,variantInfo,note,restaurantConfig });
-         return;
+         return 'pending' as const;
       }
 
       const finalPrice = priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product));
@@ -3952,7 +3953,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!(context ? await authorizeV3UIContext(isCurrent,authorize) : await authorize())) return false;
             if (!ensureSalesWithOpenZPermission()) return false;
             if (!canAddItemToCart(product,toBaseQuantity(quantity,format.factor))) return false;
-            if(dispatchLocalAuthority&&(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)&&!trackingData){setFormatSelection(null);setPendingTrackingProduct({product,quantity,price,modifiers,format});return true;}
+            if(dispatchLocalAuthority&&(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)&&!trackingData){setFormatSelection(null);setPendingTrackingProduct({product,quantity,price,modifiers,format});return 'pending' as const;}
             const selectedProduct = { ...product,...(dispatchLocalAuthority?{variantId:format.variantId||undefined}:{}), appliedTaxIds: resolveEffectiveTaxIds(product.appliedTaxIds,activeTerminalConfig,product.taxable) };
             const previous = latestAddCart.current;
             const created=addFormatLine(trackingData?[]:previous,selectedProduct,format,quantity,price,createUuid(),modifiers);
@@ -4394,32 +4395,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [config.coupons]);
 
+   const announceSaleScan = useCallback((feedback: SalesScanFeedback, message: string, inCamera = false) => {
+      if (!inCamera && feedback === 'added') {
+         setErrorToast(null);
+         setSuccessToast(message);
+         playScanFeedbackSound('added');
+      } else if (!inCamera && feedback === 'not-found') {
+         setSuccessToast(null);
+         setErrorToast(message);
+         playScanFeedbackSound('not-found');
+      }
+      return { success: feedback === 'added' || feedback === 'handled', message, feedback };
+   }, []);
+
    const resolveSubmittedCode = useCallback(async (raw: string) => {
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       const resolveAndAdd = async () => {
          const presentationMatches=Object.entries(presentationMasters).flatMap(([itemId,master])=>master.formats.filter(format=>format.active&&format.allowSale&&format.barcode&&format.barcode===raw).map(format=>({itemId,master,format})));
          if(presentationMatches.length>1)throw Error('INVENTORY_PRESENTATION_BARCODE_AMBIGUOUS');
-         if(presentationMatches.length===1){const selected=presentationMatches[0],product=products.find(p=>p.id===selected.itemId);if(product){const match={product:{...product,inventoryPresentationMaster:selected.master},quantity:1,price:presentationUnitPrice(selected.format,activeTariffId,selected.master),modifiers:[]};return {match,added:await addSelectedPresentation(match.product,selected.format.id)};}}
+         if(presentationMatches.length===1){const selected=presentationMatches[0],product=products.find(p=>p.id===selected.itemId);if(product){const match={product:{...product,inventoryPresentationMaster:selected.master},quantity:1,price:presentationUnitPrice(selected.format,activeTariffId,selected.master),modifiers:[]};const added=await addSelectedPresentation(match.product,selected.format.id);return {match,added:added===true,pending:added==='pending'};}}
          const match: {product: Product; quantity: number; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string; format?: ArticleFormat} | null = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
          if (context) assertV3UIContext(() => mounted() && addContext.current === context);
          if (match && 'format' in match && match.format) {
             routeQuickFormat(match.format,isReturnMode,() => {});
             const added = await addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
-            return {match,added};
+            return {match,added:added === true,pending:added === 'pending'};
          }
          if (match && isWeightedProduct(match.product)) {
             assertWeightedCodeInput(match.product, raw);
             handleProductClick(match.product);
-            return { match, added: true };
+            return { match, added: false, pending: true };
          }
          if(match && productHasRestaurantConfiguration(match.product)){
             if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
-            handleProductClick(match.product);return {match,added:true};
+            handleProductClick(match.product);return {match,added:false,pending:true};
          }
          const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
             match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
-         return { match, added };
+         return { match, added: added === true, pending: added === 'pending' };
       };
       return context ? scanQueue.current.run(() => mounted() && addContext.current === context, resolveAndAdd) : resolveAndAdd();
    }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick, addSelectedFormat,presentationMasters,products,activeTariffId,addSelectedPresentation]);
@@ -4430,11 +4444,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const rawValue = e.currentTarget.value || searchTerm || '';
          if (routeScannedCoupon(rawValue)) return;
 
-         const { match, added } = await resolveSubmittedCode(rawValue);
+         const { match, added, pending } = await resolveSubmittedCode(rawValue);
          if (match) {
-            if (v3Operational && !added) return;
+            if (v3Operational && !added && !pending) return;
             setSearchTerm('');
-            if (added) setErrorToast(null);
+            if (added) announceSaleScan('added', `Producto agregado: ${match.product.name}`);
             // Ensure focus stays on search bar
             searchInputRef.current?.focus();
          } else {
@@ -4443,21 +4457,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
 
             if (rawValue.trim()) {
-               setErrorToast("Código no encontrado");
-               setTimeout(() => setErrorToast(null), 2000);
+               announceSaleScan('not-found', 'Código no encontrado');
             }
          }
       }
       } catch (error: any) { setErrorToast(describeV3Error(error)); }
-   }, [searchTerm, routeScannedCoupon, resolveSubmittedCode, v3Operational]);
+   }, [searchTerm, routeScannedCoupon, resolveSubmittedCode, v3Operational, announceSaleScan]);
 
    // --- BARCODE SCANNER LOGIC ---
    const performBarcode = useCallback(async (
       code: string,
-      context: { onReservationRecovered?: () => void } = {},
+      context: { onReservationRecovered?: () => void; inCamera?: boolean } = {},
    ) => {
+      const finish = (feedback: SalesScanFeedback, message: string) => announceSaleScan(feedback, message, context.inCamera);
+      const finishProduct = (added: unknown, product: Product, rejected = 'No se pudo agregar el artículo') => {
+         if (added === 'pending') return finish('handled', `${product.name}: complete su selección`);
+         return added === true
+            ? finish('added', `Producto agregado: ${product.name}`)
+            : finish('rejected', rejected);
+      };
       const trimmed = code.trim();
-      if (!trimmed) return { success: false, message: 'Código vacío' };
+      if (!trimmed) return finish('rejected', 'Código vacío');
       const trace = beginPosInteraction('BARCODE_SCAN', { codeLength: trimmed.length });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
@@ -4465,7 +4485,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // A hardware scan is consumed even when routing/lookup finds no match.
       setSearchTerm('');
 
-      if (routeScannedCoupon(trimmed)) return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
+      if (routeScannedCoupon(trimmed)) return finish('handled', 'Cupón leído. Valide para aplicarlo.');
 
       // 0. Try Smart QR (JSON)
       try {
@@ -4477,12 +4497,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (found) {
                   handleRecoverReservation(found);
                   context.onReservationRecovered?.();
-                  return { success: true, message: 'Reserva recuperada' };
+                  return finish('handled', 'Reserva recuperada');
                }
             }
             if (data.type === 'INVOICE_RETURN' && data.id) {
                onOpenInvoiceActions(trimmed);
-               return { success: true, message: 'Factura identificada' };
+               return finish('handled', 'Factura identificada');
             }
          }
       } catch (e) {
@@ -4496,33 +4516,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (v3Operational) throw new Error('SYNC_V3_SCALE_CONTRACT_REQUIRED');
             const product = productCodeIndex.get(scaleItem.plu)?.product;
 
-            if (product) {
-               if (scaleItem.type === 'WEIGHT') {
-                  addToCart(product, scaleItem.value);
-                  setErrorToast(`⚖️ Peso: ${scaleItem.value.toFixed(3)}kg`);
-               } else {
-                  const unitPrice = getProductPrice(product);
-                  if (unitPrice > 0) {
-                     const weight = scaleItem.value / unitPrice;
-                     addToCart(product, weight);
-                     setErrorToast(`💲 Precio: $${scaleItem.value} (${weight.toFixed(3)}kg)`);
-                  } else {
-                     addToCart(product, 1, scaleItem.value);
-                  }
-               }
-               setTimeout(() => setErrorToast(null), 3000);
-               return { success: true, message: `${product.name} agregado` };
-            } else {
-               setErrorToast(`Producto PLU ${scaleItem.plu} no encontrado`);
-               setTimeout(() => setErrorToast(null), 3000);
-               return { success: false, message: `Producto PLU ${scaleItem.plu} no encontrado` };
+            if (!product) return finish('not-found', `Producto PLU ${scaleItem.plu} no encontrado`);
+            if (scaleItem.type === 'WEIGHT') {
+               return finishProduct(await addToCart(product, scaleItem.value), product);
             }
+            const unitPrice = getProductPrice(product);
+            const added = unitPrice > 0
+               ? await addToCart(product, scaleItem.value / unitPrice)
+               : await addToCart(product, 1, scaleItem.value);
+            return finishProduct(added, product);
          }
       }
 
       const selectedPresentation=Object.entries(presentationMasters).flatMap(([itemId,master])=>master.formats.filter(f=>f.active&&f.allowSale&&f.barcode===trimmed&&f.barcode).map(format=>({itemId,master,format})));
       if(selectedPresentation.length>1)throw Error('INVENTORY_PRESENTATION_BARCODE_AMBIGUOUS');
-      if(selectedPresentation.length===1){const selected=selectedPresentation[0],source=products.find(p=>p.id===selected.itemId);if(source){const added=await addSelectedPresentation({...source,inventoryPresentationMaster:selected.master},selected.format.id);return {success:added,message:added?'Presentación agregada':'Presentación rechazada'};}}
+      if(selectedPresentation.length===1){const selected=selectedPresentation[0],source=products.find(p=>p.id===selected.itemId);if(source){const added=await addSelectedPresentation({...source,inventoryPresentationMaster:selected.master},selected.format.id);return finishProduct(added, source, 'Presentación rechazada');}}
 
       // 2. Normal Barcode Search. Use the memoized code index instead of scanning
       // the whole catalog on every hardware scan.
@@ -4531,48 +4539,43 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if ('format' in match && match.format) {
             routeQuickFormat(match.format,isReturnMode,() => {});
             const added = await addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
-            return {success:added,message:added ? `Producto agregado: ${match.product.name}` : 'Presentación rechazada'};
+            return finishProduct(added, match.product, 'Presentación rechazada');
          }
          setSearchTerm('');
          if (isWeightedProduct(match.product)) {
             assertWeightedCodeInput(match.product, trimmed);
             handleProductClick(match.product);
-            return { success: true, message: `${match.product.name}: ingrese o lea el peso` };
+            return finish('handled', `${match.product.name}: ingrese o lea el peso`);
          }
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
          if(productHasRestaurantConfiguration(match.product)){
             if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
-            handleProductClick(match.product);return {success:true,message:`${match.product.name}: seleccione sus opciones`};
+            handleProductClick(match.product);return finish('handled', `${match.product.name}: seleccione sus opciones`);
          }
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
-         } else {
-            const added = await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
-            if (v3Operational && !added) return { success: false, message: 'V3: artículo rechazado' };
+            return finish('handled', `${match.product.name}: seleccione sus opciones`);
          }
-         setErrorToast(`Producto agregado: ${match.product.name}`);
-         setTimeout(() => setErrorToast(null), 1500);
-         return { success: true, message: `${match.product.name} agregado` };
+         const added = await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+         return finishProduct(added, match.product);
       }
 
       // Invoice-like prefixes are intentionally evaluated after scale/product
       // lookup so an existing SKU such as INV001 or NC-SODA keeps POS priority.
       if (shouldRouteInvoiceScan(trimmed)) {
          onOpenInvoiceActions(trimmed);
-         return { success: true, message: 'Factura identificada' };
+         return finish('handled', 'Factura identificada');
       }
 
       // 3. Try Transaction Search only for document-looking scans. Product
       // barcodes should not pay the cost of scanning large ticket histories.
-      setErrorToast('Código no encontrado');
-      setTimeout(() => setErrorToast(null), 2000);
-      return { success: false, message: 'Código no encontrado' };
+      return finish('not-found', 'Código no encontrado');
       } finally {
          markInteractionStateUpdate(trace, 1);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational, addSelectedFormat,presentationMasters,products,addSelectedPresentation]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational, addSelectedFormat,presentationMasters,products,addSelectedPresentation,announceSaleScan]);
 
    const processBarcode = useCallback((...args: Parameters<typeof performBarcode>) => {
       const context = v3Operational;
@@ -4583,7 +4586,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return operation.catch((error: any) => {
          const message = describeV3Error(error);
          setErrorToast(message);
-         return { success: false, message };
+         return { success: false, message, feedback: 'rejected' as const };
       });
    }, [performBarcode, v3Operational]);
 
@@ -5079,14 +5082,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          })
          : null;
 
-      if (textMatch?.product || filteredProducts.length > 0) {
+      if (textMatch?.product) {
          setErrorToast(null);
          focusTarget?.current?.focus();
          return true;
       }
 
-      return Boolean(normalizedTextSearch);
-   }, [salesCatalogProductEntries, effectiveAllowedCategorySet, filteredProducts, handleProductClick, categoryLookup.presentationByCanonical]);
+      return false;
+   }, [salesCatalogProductEntries, effectiveAllowedCategorySet, categoryLookup.identity, categoryLookup.presentationByCanonical]);
 
    submitProductTextSearchRef.current = submitProductTextSearch;
 
@@ -5098,11 +5101,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      const { match, added } = await resolveSubmittedCode(trimmed);
+      const { match, added, pending } = await resolveSubmittedCode(trimmed);
       if (match) {
-         if (v3Operational && !added) return;
+         if (v3Operational && !added && !pending) return;
          setSearchTerm('');
-         setErrorToast(null);
+         if (added) announceSaleScan('added', `Producto agregado: ${match.product.name}`);
          retailSearchInputRef.current?.focus();
          return;
       }
@@ -5111,14 +5114,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      if (filteredProducts.length === 0) {
-         setErrorToast("Código no encontrado");
-         setTimeout(() => setErrorToast(null), 2000);
-      }
+      announceSaleScan('not-found', 'Código no encontrado');
 
       retailSearchInputRef.current?.focus();
       } catch (error: any) { setErrorToast(describeV3Error(error)); }
-   }, [searchTerm, resolveSubmittedCode, filteredProducts, submitProductTextSearch, v3Operational]);
+   }, [searchTerm, resolveSubmittedCode, submitProductTextSearch, v3Operational, announceSaleScan]);
 
    const categoryOptions = useMemo(() => {
       const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
@@ -11272,6 +11272,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
             onScan={async (code) => processBarcode(code, {
+               inCamera: true,
                onReservationRecovered: () => setIsScannerOpen(false),
             })}
          />
@@ -11371,7 +11372,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-5">
                   <div className="bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border border-emerald-500">
                      <Check size={20} />
-                     <span>{successToast}</span>
+                     <span role="status">{successToast}</span>
                   </div>
                </div>
             )
