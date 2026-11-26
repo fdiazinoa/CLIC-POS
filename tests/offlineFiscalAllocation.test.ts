@@ -11,7 +11,7 @@ import {createContext,Script} from 'node:vm';
 import ts from 'typescript';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 import {FISCAL_WORKFLOW_V2_SCHEMA,NativeFiscalWorkflowV2Store} from '../services/db/FiscalWorkflowV2Store';
-import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA,readAllocationSelection} from '../services/db/OfflineFiscalAllocationStore';
+import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA,allocationCommitPreconditions,readAllocationSelection} from '../services/db/OfflineFiscalAllocationStore';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA} from '../services/db/NativeFiscalReservation';
 import {DURABLE_OUTBOX_SCHEMA_SQL} from '../services/sync/DurableOutboxSchema';
 import {offlineFiscalAuthorityFromConfig} from '../services/fiscal/OfflineFiscalLeaseContext';
@@ -65,6 +65,35 @@ async function fixtureWithLaggingE32(){
  f.sql.exec("UPDATE documents SET data=json_set(data,'$.currentNumber',147) WHERE collection_name='localFiscalBuffer'");
  return f;
 }
+
+test('allocation uses one query for the range and buffer and one for the exact commit preconditions', async () => {
+ for (const buffer of [true, false]) {
+  const f = await fixture({ buffer });
+  try {
+   const checkout = await f.client().reserveOfflineCheckout(identity('batched'), 'batched');
+   const queries: string[] = [];
+   const bridge = {
+    ...f.bridge,
+    query: (sql: string, params?: any[]) => { queries.push(sql); return f.bridge.query(sql, params); },
+   };
+   const snapshots = await allocationCommitPreconditions(bridge, checkout);
+   const ids = [
+    ['config', 'current'],
+    ['fiscalAllocations', f.allocation.id],
+    ['fiscalRanges', f.range.id],
+    ['localFiscalBuffer', checkout.allocation.bufferId],
+   ];
+   const read = f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?');
+   assert.deepEqual(snapshots.map(({ collection, id, expected }) => ({ collection, id, expected })),
+    ids.map(([collection, id]) => ({ collection, id, expected: read.get(collection, id)?.data ?? null })));
+   assert.equal(snapshots[3].expected === null, !buffer);
+   assert.equal(queries.filter(sql => /fiscalAllocations|fiscalRanges|localFiscalBuffer/.test(sql)).length, 1);
+   assert.equal(queries.filter(sql => /FROM requested/.test(sql)).length, 1);
+   assert.equal(f.sql.prepare("SELECT COUNT(*) AS count FROM documents WHERE collection_name='nativeFiscalReservations'").get()?.count, 0);
+   assert.equal(f.count('sync_outbox_v2'), 0);
+  } finally { f.sql.close(); }
+ }
+});
 
 test('retained E32 cursor proves next NCF despite a lagging allocation snapshot without writes or reuse',async()=>{
  const f=await fixtureWithLaggingE32();
