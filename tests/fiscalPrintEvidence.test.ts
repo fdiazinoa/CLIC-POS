@@ -83,10 +83,11 @@ test('actual TicketHistory email refreshes archived persisted proof after approv
  await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
 });
 
-async function workflowFixture(checkoutId?: string){
+async function workflowFixture(checkoutId?: string, transactionId?: string){
  const f=await fixture();delete f.tx.fiscalPrintProof;delete f.tx.fiscalSubmissionScope;
  Object.assign(f.tx,{ncf:'E310000001021',electronicNcf:'E310000001021',ncfType:'E31',customerSnapshot:{name:'Original incorrecto',taxId:'BAD'},currency:'DOP',fiscalEnvironment:0,fiscalIssuance:{issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal'}});
  if (checkoutId) f.tx.fiscalWorkflowCheckoutId = checkoutId;
+ if (transactionId) f.tx.id = transactionId;
  const envelope={transaction:JSON.parse(JSON.stringify(f.tx))};
  const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'};
  const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
@@ -219,6 +220,44 @@ test('print readiness survives a transient status error and returns a signed pen
  assert.equal(attempts, 2);
  assert.equal(display?.securityCode, state.signature.securityCode);
  assert.equal(display?.dgiiAccepted, false);
+});
+
+test('a private terminal hint wakes an active print and still requires an authenticated signature', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+ const { tx, state } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108', '11ddc090-03ec-433b-996d-b62f00fde109');
+ const scope = { tenantId: 'tenant-a', storeId: 'store-a', terminalId: 'terminal-a' };
+ const hint = { version: 1, transactionId: tx.id, ...scope };
+ const controller = new AbortController();
+ t.after(() => controller.abort());
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ let firstConsult!: () => void;
+ const consulting = new Promise<void>(resolve => { firstConsult = resolve; });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) { firstConsult(); return { ...state, signature: null }; }
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.timers.enable({ apis: ['setTimeout'] });
+ const print = resolveFiscalPrintReadiness(tx, { waitForSignature: true, signal: controller.signal });
+ await consulting;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, { ...scope, terminalId: 'retired-context' });
+ receiveFiscalPrintHint({ ...hint, storeId: 'another-store' }, scope, scope);
+ receiveFiscalPrintHint({ ...hint, transactionId: '00000000-0000-0000-0000-000000000001' }, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, scope);
+ receiveFiscalPrintHint(hint, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 2, 'wakes without the polling timer and ignores the duplicate hint');
+ assert.equal((await print)?.securityCode, state.signature.securityCode);
+ assert.equal((await print)?.dgiiAccepted, false);
 });
 
 test('committed MSeller sales and returns send the existing outbox before reading print status', async t => {

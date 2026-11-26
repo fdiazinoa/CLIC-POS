@@ -1,3 +1,4 @@
+import { onFiscalPrintHint } from './FiscalPrintHint';
 import type {Transaction} from '../../types';
 import {verifyFiscalStatusProof,type FiscalStatusProof,sameFiscalNcf} from './FiscalStatusProof';
 export interface FiscalPrintEvidence {schemaVersion:1;qrUrl:string;securityCode:string;signedAt:string}
@@ -99,7 +100,7 @@ export const requiresMSellerPrintSignature = (tx: Transaction): boolean =>
 export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000,signal,waitForSignature=false}:{timeoutMs?:number;signal?:AbortSignal;waitForSignature?:boolean}={}):Promise<FiscalPrintDisplay|undefined>{
  let display=await resolveFiscalPrintDisplay(tx);if(display||tx.fiscalProvider!=='MSELLER'||signal?.aborted)return display;
  const {fiscalWorkflowV2Client}=await import('./FiscalWorkflowV2Client');
- if(!fiscalWorkflowV2Client.enabled())return display;
+ if(signal?.aborted||!fiscalWorkflowV2Client.enabled())return display;
  const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
  const startedAt = Date.now();
  const budget=Math.max(0,Math.min(8000,timeoutMs)),deadline=waitForSignature?Infinity:startedAt+budget;
@@ -111,6 +112,15 @@ export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000
   void fiscalWorkflowV2Client.consult(tx.id, controller.signal).then(resolve, reject)
    .finally(() => controller.signal.removeEventListener('abort', stop));
  });
+ let hintSeen = false;
+ let hintPending = false;
+ let wake: (() => void) | undefined;
+ const unsubscribe = waitForSignature ? onFiscalPrintHint(tx.id, () => {
+  if (hintSeen) return;
+  hintSeen = true;
+  hintPending = true;
+  wake?.();
+ }) : undefined;
  try{
   do{
    try {
@@ -123,10 +133,23 @@ export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000
    }
    const left=deadline-Date.now();if(left<=0||controller.signal.aborted)break;
    const pollInterval = waitForSignature && Date.now() - startedAt >= 30_000 ? 5000 : 1500;
-   await new Promise<void>(resolve=>{const done=()=>{clearTimeout(wait);controller.signal.removeEventListener('abort',done);resolve();};const wait=setTimeout(done,Math.min(pollInterval,left));controller.signal.addEventListener('abort',done,{once:true});});
+   if (!hintPending) {
+    await new Promise<void>(resolve => {
+     const done = () => {
+      clearTimeout(wait);
+      controller.signal.removeEventListener('abort', done);
+      wake = undefined;
+      resolve();
+     };
+     const wait = setTimeout(done, Math.min(pollInterval, left));
+     wake = done;
+     controller.signal.addEventListener('abort', done, { once: true });
+    });
+   }
+   hintPending = false;
   }while(!controller.signal.aborted&&Date.now()<deadline);
   return display;
- }finally{clearTimeout(timer);controller.abort();signal?.removeEventListener('abort',abort);}
+ }finally{unsubscribe?.();clearTimeout(timer);controller.abort();signal?.removeEventListener('abort',abort);}
 }
 
 /** Dispatch the existing durable batch and look up its timbre off the checkout path. */
