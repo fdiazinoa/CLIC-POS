@@ -508,7 +508,31 @@ for (const consumerFinalE32 of [false, true]) test(`native status and print proo
         assert.match(jobs[0], /ABCDEF/);
         assert.match(jobs[0], /Pendiente de confirmacion/);
     } else {
-        await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+        const { createFiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+        const store = f.adapter.fiscalWorkflowStore;
+        const originalReadState = store.readState.bind(store);
+        let resumeState!: () => void;
+        const stateGate = new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(Error('Status GET did not start during the SQLite read')), 1000);
+            resumeState = () => { clearTimeout(timer); resolve(); };
+        });
+        t.mock.method(store, 'readState', async (id: string) => { await stateGate; return originalReadState(id); });
+        const readAttempt = t.mock.method(store, 'readReturnAttempt', async () => a);
+        const client = createFiscalWorkflowV2Client({
+            store: () => store,
+            readSource: async () => tx,
+            readAuth: () => ({ base: 'https://return-fixture.invalid/api/sync', headers: {}, descriptor: a.scope, assertCurrent() {} }),
+            fetchImpl: async (url: string, options: RequestInit) => {
+                assert.equal(new URL(url).pathname, '/api/sync/fiscal/workflow/v2/status');
+                assert.equal(options.method, 'GET');
+                resumeState();
+                return Response.json(signed);
+            },
+        } as any);
+        t.mock.method(client, 'enabled', () => true);
+        assert.equal((await client.consult(tx.id, undefined, 500)).state, 'SIGNED_PENDING');
+        assert.equal(readAttempt.mock.callCount(), 1);
+        assert.equal((await originalReadState(tx.id))?.observationVersion, 1);
     }
     const accepted = { ...signed, state: 'ACCEPTED', decision: 'ACCEPTED', observationVersion: 2 };
     assert.equal(await verifyReturnStatus(tx, accepted, a, signed), true);
