@@ -158,7 +158,7 @@ export interface LargeMasterSyncV3Store {
   getLocalInventoryDelta?(baseline: string, itemId: string, warehouseId: string): Promise<number>;
   assertCanRefresh?(): Promise<void>;
   getLocalInventoryDeltas?(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>>;
-  getOperationalSupports?(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string): Promise<{
+  getOperationalSupports?(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string, checkInventory?: boolean): Promise<{
     balances: Record<string, { qtyOnHand: number; qtyReserved: number; qtyCommitted: number }>;
     variants: Record<string, Record<string, unknown>[]>;
   }>;

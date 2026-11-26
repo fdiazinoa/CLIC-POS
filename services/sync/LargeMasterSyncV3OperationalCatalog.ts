@@ -124,7 +124,7 @@ export class LargeMasterSyncV3OperationalCatalog {
   private async adapt(sale: V3SaleArticle, support?: {
     balance: { qtyOnHand: number; qtyReserved: number; qtyCommitted: number } | null;
     variants: RecordObject[];
-  }): Promise<V3OperationalProduct> {
+  }, checkedSupport = false): Promise<V3OperationalProduct> {
     const article = sale.article;
     const sourceFlags = operationalFlags(article.operationalFlags);
     const rawFlags = article.operationalFlags as RecordObject | undefined;
@@ -151,10 +151,17 @@ export class LargeMasterSyncV3OperationalCatalog {
       || sale.version.syncVersion !== this.ready.runtime.version.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVALID');
     }
-    const [balance, sourceVariants] = support ? [support.balance, support.variants] : await Promise.all([
-      this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
-      this.ready.runtime.getOperationalVariants(articleId),
-    ]);
+    const readSupport = async () => {
+      const combined = checkedSupport
+        ? await this.ready.runtime.getOperationalSupports([articleId], this.warehouseId, true)
+        : undefined;
+      return combined ? [combined.balances[articleId] ?? null, combined.variants[articleId] ?? []] as const
+        : Promise.all([
+          this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
+          this.ready.runtime.getOperationalVariants(articleId),
+        ]);
+    };
+    const [balance, sourceVariants] = support ? [support.balance, support.variants] : await readSupport();
     // Missing balances are zero availability, not a catalog visibility rule.
     // Sale validation enforces the authoritative negative-stock settings.
     if (sourceFlags.isWeighted && sourceVariants.length > 0) {
@@ -276,7 +283,7 @@ export class LargeMasterSyncV3OperationalCatalog {
   async get(articleId: string): Promise<V3OperationalProduct | null> {
     await this.assertInventoryVersion();
     const sale = await this.saleCatalog.get(articleId);
-    const item = sale ? await this.adapt(sale) : null;
+    const item = sale ? await this.adapt(sale, undefined, true) : null;
     await this.assertInventoryVersion();
     return item;
   }

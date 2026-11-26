@@ -224,22 +224,42 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     }));
   }
 
-  async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string) {
+  async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string,
+    checkInventory = false) {
     requireOperationalVersion(runtime);
-    if (!itemIds.length) return { balances: {}, variants: {} };
+    const balances: Record<string, { qtyOnHand: number; qtyReserved: number; qtyCommitted: number }> = {};
+    const variants: Record<string, Record<string, unknown>[]> = {};
+    if (!itemIds.length) return { balances, variants };
     if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
     const placeholders = itemIds.map(() => '?').join(',');
-    const [balanceRows, variantRows] = await Promise.all([
-      this.connection().query(`SELECT item_id, qty_on_hand, qty_reserved, qty_committed FROM master_v3_inventory_balances
-        WHERE warehouse_id = ? AND item_id IN (${placeholders})`, [warehouseId, ...itemIds]),
-      this.connection().query(`SELECT article_id, record_json FROM master_v3_variants WHERE sync_version = ?
-        AND article_id IN (${placeholders}) AND active = 1 ORDER BY variant_id`, [runtime.syncVersion, ...itemIds]),
-    ]);
-    const variants: Record<string, Record<string, unknown>[]> = {};
-    rows(variantRows).forEach(row => (variants[String(row.article_id)] ||= []).push(operationalRecord(row)));
-    return { variants, balances: Object.fromEntries(rows(balanceRows).map(row => [String(row.item_id), {
-      qtyOnHand: Number(row.qty_on_hand), qtyReserved: Number(row.qty_reserved), qtyCommitted: Number(row.qty_committed),
-    }])) };
+    // The single-article path needs the same live inventory check as getInventoryBalance.
+    // An explicit marker distinguishes an absent baseline from an article with no balance.
+    const inventoryCte = checkInventory ? `WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})` : '';
+    const marker = checkInventory
+      ? "UNION ALL SELECT 'inventory', NULL, NULL, NULL, NULL, NULL, NULL FROM inventory"
+      : '';
+    const params = checkInventory ? [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion] : [];
+    const result = await this.connection().query(`${inventoryCte}
+      SELECT 'balance' AS kind, item_id AS article_id, qty_on_hand, qty_reserved, qty_committed,
+        NULL AS record_json, NULL AS variant_id
+      FROM master_v3_inventory_balances WHERE warehouse_id = ? AND item_id IN (${placeholders})
+      UNION ALL
+      SELECT 'variant', article_id, NULL, NULL, NULL, record_json, variant_id
+      FROM master_v3_variants WHERE sync_version = ? AND article_id IN (${placeholders}) AND active = 1
+      ${marker}
+      ORDER BY variant_id`,
+    [...params, warehouseId, ...itemIds, runtime.syncVersion, ...itemIds]);
+    const supportRows = rows(result);
+    if (checkInventory && !supportRows.some(row => row.kind === 'inventory')) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    }
+    for (const row of supportRows) {
+      if (row.kind === 'variant') (variants[String(row.article_id)] ||= []).push(operationalRecord(row));
+      else if (row.kind === 'balance') balances[String(row.article_id)] = {
+        qtyOnHand: Number(row.qty_on_hand), qtyReserved: Number(row.qty_reserved), qtyCommitted: Number(row.qty_committed),
+      };
+    }
+    return { balances, variants };
   }
 
   async findOperationalCode(runtime: LargeMasterSyncV3RuntimeVersion, code: string): Promise<{ articleId: string; variantId: string | null } | null> {
