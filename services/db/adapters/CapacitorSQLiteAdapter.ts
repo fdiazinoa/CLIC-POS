@@ -580,7 +580,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     THEN json_object(
                         'companyInfo', json_object('rnc', doc.data -> '$.companyInfo.rnc'),
                         'fiscalCompliance', doc.data -> '$.fiscalCompliance',
-                        'terminals', (SELECT json_group_array(json_object(
+                        'terminals', json((SELECT json_group_array(json_object(
                             'id', terminal.value -> '$.id',
                             'config', json_object(
                                 'currentDeviceId', terminal.value -> '$.config.currentDeviceId',
@@ -609,7 +609,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                             WHERE json_type(terminal.value, '$.id') = 'text'
                             AND terminal.value ->> '$.id' COLLATE BINARY = ?
                             AND json_type(terminal.value, '$.config.currentDeviceId') = 'text'
-                            AND terminal.value ->> '$.config.currentDeviceId' COLLATE BINARY = ?)
+                            AND terminal.value ->> '$.config.currentDeviceId' COLLATE BINARY = ?))
                     )
                 END END AS data
                 FROM documents AS doc
