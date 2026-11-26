@@ -2,13 +2,13 @@ import {verifyReturnSettlementPresentation,returnSettlementLines} from '../servi
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
-import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
+import { fiscalPrintTransaction, isVerifiedFiscalPrintDisplay, MSELLER_PRINT_WAIT_MS, resolveFiscalPrintReadiness, terminalUsesMSellerRealtimePrint, type FiscalPrintDisplay } from '../services/fiscal/FiscalPrintEvidence';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
-import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
+import { notifyPrintFailure, PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement, TerminalConfig } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
@@ -23,6 +23,10 @@ import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
 import { receiptSaleOperator, receiptUsesRestaurantService } from './receiptSaleContext';
 import { formatReceiptVariant, receiptModifiersWithoutVariant } from './receiptVariant';
+import { getStoredErpSyncBinding } from './erpSyncLifecycle';
+import { resolveLocalDeviceId } from './deviceRevocation';
+import { waitForLargeMasterSyncV3BaselineMutation } from '../services/sync/LargeMasterSyncV3OperationGate';
+import { LargeMasterSyncV3Error } from '../services/sync/LargeMasterSyncV3Types';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -251,10 +255,12 @@ export const buildTicketTaxPresentationHtml = (
     return { fiscalSummary, itemTaxHtml, totalTaxHtml };
 };
 
-const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
-    const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
-    if(persisted)transaction=persisted;
-    const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+const readPrintTransaction = async (transaction: Transaction): Promise<Transaction> =>
+    await dbAdapter.getDocument<Transaction>('transactions', transaction.id)
+    || await dbAdapter.getDocument<Transaction>('transactionHistory', transaction.id)
+    || transaction;
+
+const printTicketInternal = async (transaction: Transaction, config: BusinessConfig, fiscalPrint?: FiscalPrintDisplay): Promise<boolean> => {
     const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
@@ -1310,18 +1316,61 @@ export const printCouponForTransaction = async (transaction: Transaction, config
         return false;
     }
 };
-export const printTicket = async (...args: Parameters<typeof printTicketInternal>) => {
-    const transaction = args[0];
-    await verifyReturnSettlementPresentation(transaction);
-    const accepted = await trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
-        ()=>runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args)));
-    if (accepted && args[1].receiptConfig?.printCouponSlip) {
-        // Optional issuance starts after invoice/checkout tracking has finished.
-        // Its failure must never report the already accepted invoice as failed.
-        try { await printCouponForTransaction(transaction, args[1], false); }
-        catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
-    }
-    return accepted;
+const pendingTickets = new Map<string, Promise<boolean>>();
+export const printTicket = (requested: Transaction, config: BusinessConfig): Promise<boolean> => {
+    const existing = pendingTickets.get(requested.id);
+    if (existing) return existing;
+
+    const request = (async () => {
+        await verifyReturnSettlementPresentation(requested);
+        return trackCheckoutPrint({transactionId:requested.id,displayId:requested.displayId,items:requested.items,total:requested.total,reason:'TICKET'}, async () => {
+            const printKey = `ticket:${requested.id}`;
+            const consultAndPrint = async (transaction: Transaction) =>
+                printTicketInternal(transaction, config, await resolveFiscalPrintReadiness(transaction));
+            if (typeof localStorage === 'undefined' || !config.terminals?.some(terminal => terminal.config.msellerRealtimePrintEnabled === true)) {
+                return runPrintTask(printKey, 'Ticket', async () => consultAndPrint(await readPrintTransaction(requested)));
+            }
+
+            const transaction = await readPrintTransaction(requested);
+            const usesHint = (transaction: Transaction): boolean =>
+                terminalUsesMSellerRealtimePrint(transaction, config.terminals, getStoredErpSyncBinding(), resolveLocalDeviceId());
+            if (!usesHint(transaction)) return runPrintTask(printKey, 'Ticket', () => consultAndPrint(transaction));
+            if (transaction !== requested) await verifyReturnSettlementPresentation(transaction);
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), MSELLER_PRINT_WAIT_MS);
+            try {
+                const fiscalPrint = await resolveFiscalPrintReadiness(transaction, { waitForSignature: true, signal: controller.signal });
+                if (!isVerifiedFiscalPrintDisplay(fiscalPrint)) throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED');
+                while (!controller.signal.aborted && usesHint(transaction)) {
+                    try {
+                        return runPrintTask(printKey, 'Ticket', () => printTicketInternal(transaction, config, fiscalPrint));
+                    } catch (error) {
+                        if (!(error instanceof LargeMasterSyncV3Error) || error.code !== 'SYNC_V3_OPERATIONAL_WINDOW_HELD') throw error;
+                        try {
+                            await waitForLargeMasterSyncV3BaselineMutation(controller.signal);
+                        } catch (waitError) {
+                            if (!controller.signal.aborted) throw waitError;
+                        }
+                    }
+                }
+                throw new PrintOutputError(controller.signal.aborted ? 'MSELLER_PRINT_WINDOW_EXPIRED' : 'MSELLER_SIGNATURE_REQUIRED');
+            } finally {
+                clearTimeout(timer);
+            }
+        });
+    })().then(async accepted => {
+        if (accepted && config.receiptConfig?.printCouponSlip) {
+            // Coupon issuance starts after the fiscal ticket is accepted.
+            try { await printCouponForTransaction(requested, config, false); }
+            catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
+        }
+        return accepted;
+    }).catch(error => {
+        notifyPrintFailure('Ticket', error);
+        return false;
+    }).finally(() => pendingTickets.delete(requested.id));
+    pendingTickets.set(requested.id, request);
+    return request;
 };
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));

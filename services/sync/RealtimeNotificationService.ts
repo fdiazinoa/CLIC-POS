@@ -1,6 +1,7 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
 import { dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { FISCAL_PRINT_HINT, receiveFiscalPrintHint } from '../fiscal/FiscalPrintHint';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { syncTriggerCoordinator, type SyncDomainVersions } from './SyncTriggerCoordinator';
 import { syncMetrics } from './SyncMetrics';
@@ -212,6 +213,13 @@ export class RealtimeNotificationService {
         const subscribedChannels = new Set<string>();
 
         channels.forEach((channel, channelIndex) => {
+
+        if (channelNames[channelIndex] === terminalTopic) {
+            channel.on('broadcast', { event: FISCAL_PRINT_HINT }, ({ payload }) => {
+                if (generation !== this.connectionGeneration) return;
+                receiveFiscalPrintHint(payload, authorization.scope, getStoredErpSyncBinding());
+            });
+        }
 
         if (isSyncFeatureEnabled('sync_hint_v2')) {
             channel.on('broadcast', { event: 'SYNC_HINT' }, ({ payload }) => {

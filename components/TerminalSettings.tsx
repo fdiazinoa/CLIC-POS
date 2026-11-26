@@ -1135,6 +1135,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         {activeTab === 'FISCAL' && (
                            <div className="space-y-6">
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Landmark className="text-indigo-600" /> Fiscal</h3>
+                              <Toggle
+                                 label="Adelantar impresión con timbre de MSeller"
+                                 description="Usa el aviso privado para consultar el timbre de facturas E32 y notas de crédito E34 en cuanto esté disponible. Si el aviso no llega, la caja consulta periódicamente."
+                                 checked={activeTerminal.config.msellerRealtimePrintEnabled === true}
+                                 disabled={isReadOnly}
+                                 icon={Landmark}
+                                 onChange={(enabled: boolean) => handleUpdateActiveConfig('', 'msellerRealtimePrintEnabled', enabled)}
+                              />
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                  {['B01', 'B02', 'B04', 'B14', 'B15'].map(type => (
                                     <div key={type} className="p-5 bg-slate-50 rounded-3xl space-y-3">

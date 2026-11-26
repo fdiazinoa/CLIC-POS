@@ -27,6 +27,18 @@ const apply = (incoming: any, base = business(), cached?: any, terminalId = 'T99
   applyTerminalConfigSnapshot(base, { terminalId, incomingSnapshot: incoming, cachedSnapshot: cached });
 const fiscal = (result: ReturnType<typeof apply>, id = 'T99') => result.config.terminals.find(t => t.id === id)!.config.fiscal as any;
 
+test('terminal snapshot preserves only the selected box preference for MSeller print hints', () => {
+  const base = business();
+  base.terminals[0].config.msellerRealtimePrintEnabled = true;
+  base.terminals[1].config.msellerRealtimePrintEnabled = false;
+  const incoming = snapshot({}, { msellerRealtimePrintEnabled: true });
+  assert.equal(apply(incoming, base).config.terminals[0].config.msellerRealtimePrintEnabled, true);
+  const other = apply({ ...incoming, terminal_id: 'OTHER' }, base, undefined, 'OTHER');
+  assert.equal(other.config.terminals.find(t => t.id === 'OTHER')!.config.msellerRealtimePrintEnabled, false);
+  const created = apply({ ...incoming, terminal_id: 'NEW' }, base, undefined, 'NEW');
+  assert.equal(created.config.terminals.find(t => t.id === 'NEW')!.config.msellerRealtimePrintEnabled, undefined);
+});
+
 for (const providerId of ['MSELLER', 'DIGIFACT', 'POLARIS']) {
   test(`actual ERP nested wrapper maps ${providerId}, environment and source credential reference`, () => {
     const record = { providerId, enabled: true, mode: 'ECF', environment: 2,
