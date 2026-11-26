@@ -267,6 +267,48 @@ test('invalid SALE_POSTED is rejected before sale documents or outbox are persis
     await adapter.disconnect();
 });
 
+test('a persisted outbox retry advances the existing timer without sending before its deadline', async (t) => {
+    const { backgroundSyncManager } = await import('../services/sync/BackgroundSyncManager');
+    const manager = backgroundSyncManager as unknown as {
+        scheduleSync(delayMs: number): void;
+        clearRetryTimeout(): void;
+        sync(): Promise<void>;
+    };
+    const now = new Date('2026-11-26T20:53:15.000Z');
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now });
+    const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } });
+    const adapter = new SQLiteTestAdapter();
+    const repository = new DurableOutboxRepository(adapter);
+    t.after(async () => {
+        manager.clearRetryTimeout();
+        if (navigatorDescriptor) Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+        else Reflect.deleteProperty(globalThis, 'navigator');
+        await adapter.disconnect();
+    });
+
+    await repository.commitFinancialTransaction(financialInput('event-retry'));
+    await repository.leaseDue({ owner: 'failed-attempt', limit: 1, leaseMs: 5_000, now });
+    const retryAt = new Date(now.getTime() + 6_000);
+    await repository.markRetry('event-retry', 'HTTP_TIMEOUT', retryAt);
+    assert.deepEqual(await repository.leaseDue({ owner: 'early', limit: 1, leaseMs: 5_000, now }), []);
+    assert.equal(await repository.refreshMetrics(), retryAt.getTime());
+
+    const sync = t.mock.method(manager, 'sync', async () => {});
+    manager.scheduleSync(30_000);
+    manager.scheduleSync(retryAt.getTime() - Date.now());
+    manager.scheduleSync(20_000);
+    t.mock.timers.tick(5_999);
+    assert.equal(sync.mock.callCount(), 0);
+    t.mock.timers.tick(1);
+    assert.equal(sync.mock.callCount(), 1);
+    const leased = await repository.leaseDue({ owner: 'retry', limit: 1, leaseMs: 5_000, now: new Date() });
+    assert.deepEqual(leased.map(record => record.eventId), ['event-retry']);
+    assert.equal(await repository.refreshMetrics(), null);
+    t.mock.timers.tick(24_000);
+    assert.equal(sync.mock.callCount(), 1);
+});
+
 test('leases are FIFO, single-owner and abandoned SENDING rows recover to RETRY_WAIT', async () => {
     const adapter = new SQLiteTestAdapter();
     const repository = new DurableOutboxRepository(adapter);

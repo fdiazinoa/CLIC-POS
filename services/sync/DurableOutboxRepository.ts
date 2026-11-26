@@ -354,16 +354,19 @@ export class DurableOutboxRepository {
         return rowsFromResult(result).length>0;
     }
 
-    async refreshMetrics(): Promise<void> {
-        if (!this.database.executeSQL) return;
+    async refreshMetrics(): Promise<number | null> {
+        if (!this.database.executeSQL) return null;
         const result = await this.database.executeSQL(
-            `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at
+            `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at,
+                    MIN(CASE WHEN status = 'RETRY_WAIT' THEN next_retry_at END) AS next_retry_at
              FROM sync_outbox_v2
              WHERE status IN ('PENDING','SENDING','RETRY_WAIT')`
         );
         const row = rowsFromResult(result)[0];
         const oldest = row?.oldest_created_at ? Date.parse(String(row.oldest_created_at)) : null;
         syncMetrics.setOutboxState(Number(row?.pending_count || 0), Number.isFinite(oldest) ? oldest : null);
+        const nextRetryAt = Date.parse(String(row?.next_retry_at || ''));
+        return Number.isFinite(nextRetryAt) ? nextRetryAt : null;
     }
 
     private requireSql(): (query: string, params?: any[]) => Promise<any> {

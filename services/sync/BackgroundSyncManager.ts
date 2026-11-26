@@ -40,6 +40,7 @@ class BackgroundSyncManager {
     private isProcessing = false;
     private interval: any = null;
     private retryTimeout: any = null;
+    private retryTimeoutAt: number | null = null;
     private initialized = false;
     private remoteEnabled = true;
     private remoteGeneration = 0;
@@ -190,9 +191,9 @@ class BackgroundSyncManager {
     }
 
     private clearRetryTimeout() {
-        if (!this.retryTimeout) return;
-        clearTimeout(this.retryTimeout);
+        if (this.retryTimeout !== null) clearTimeout(this.retryTimeout);
         this.retryTimeout = null;
+        this.retryTimeoutAt = null;
     }
 
     private scheduleSync(delayMs = this.FAST_RETRY_DELAY_MS) {
@@ -204,10 +205,14 @@ class BackgroundSyncManager {
             return;
         }
 
-        if (this.retryTimeout) return;
+        const retryAt = Date.now() + delayMs;
+        if (this.retryTimeoutAt !== null && this.retryTimeoutAt <= retryAt) return;
 
+        this.clearRetryTimeout();
+        this.retryTimeoutAt = retryAt;
         this.retryTimeout = setTimeout(() => {
             this.retryTimeout = null;
+            this.retryTimeoutAt = null;
             void this.sync();
         }, delayMs);
     }
@@ -561,9 +566,10 @@ class BackgroundSyncManager {
             shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
+            let durableRetryAt: number | null = null;
             try {
                 if (!isPosSaleActive()) {
-                    await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+                    durableRetryAt = await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
                 } else {
                     pausedForSaleActivity = true;
                 }
@@ -581,7 +587,9 @@ class BackgroundSyncManager {
                 && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
                 const unsupportedAuditOnly = (!isSyncFeatureEnabled('pos_operational_audit') || !['ERP_ACTIVE', 'POS_CLOUD_STAGING'].includes(operationalTarget.kind))
                     && !shouldRetrySoon && this.state.pendingCount === this.auditPendingCount;
-                this.scheduleSync(unsupportedAuditOnly ? this.WORKER_INTERVAL_MS : this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
+                const defaultDelay = unsupportedAuditOnly ? this.WORKER_INTERVAL_MS : this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS;
+                const durableDelay = durableRetryAt != null ? Math.max(1000, durableRetryAt - Date.now()) : defaultDelay;
+                this.scheduleSync(Math.min(defaultDelay, durableDelay));
             }
         }
     }
@@ -762,12 +770,13 @@ class BackgroundSyncManager {
 
     private async updatePendingCount(collectionOverride?: string[]) {
         const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents()||await durableOutboxRepository.hasPendingReturnEvents();
+        let durableRetryAt: number | null = null;
         let count = 0;
         let blockedCount = 0;
         let auditPendingCount = 0;
         let oldestCreatedAt: number | null = null;
         if (durableBatchActive && durableOutboxRepository.isSupported()) {
-            await durableOutboxRepository.refreshMetrics();
+            durableRetryAt = await durableOutboxRepository.refreshMetrics();
             const durableMetrics = syncMetrics.getSnapshot();
             count = durableMetrics.outbox_pending_count;
             oldestCreatedAt = durableMetrics.outbox_oldest_age > 0
@@ -817,6 +826,7 @@ class BackgroundSyncManager {
         syncMetrics.setOutboxState(count, oldestCreatedAt);
         this.auditPendingCount = auditPendingCount;
         this.updateState({ pendingCount: count, blockedCount });
+        return durableRetryAt;
     }
 
     private updateState(newState: Partial<SyncState>) {
