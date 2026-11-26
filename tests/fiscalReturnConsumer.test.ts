@@ -206,6 +206,28 @@ test('two original status timeouts leave the attempt unprepared', async (t) => {
     assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
 });
 
+test('one return authorization recovers a dropped original GET and a temporarily missing reference', async t => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    let reads = 0;
+    f.setConsult(async id => {
+        assert.equal(id, f.original.id);
+        assert.equal(f.prepareCalls.length, 0);
+        assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
+        reads++;
+        if (reads === 1) throw new TypeError('Failed to fetch');
+        if (reads === 2) return { ...f.parent, originalReference: null, originalReferenceReason: 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE' };
+        return f.parent;
+    });
+    const result = await f.run();
+    assert.equal(result.ncfType, 'E34');
+    assert.equal(reads, 3);
+    assert.equal(f.prepareCalls.length, 1);
+    assert.equal(JSON.parse(f.prepareCalls[0]).originalReference.ncf, f.original.ncf);
+    const count = f.db.prepare("SELECT count(*) n FROM sync_outbox_v2 WHERE event_type='SALES_CREDIT_NOTE_POSTED'").get() as { n: number };
+    assert.equal(count.n, 1);
+});
+
 test('an unaccepted original cannot reserve an E34 number', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());

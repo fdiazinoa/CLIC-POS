@@ -107,6 +107,23 @@ interface ConsumerPorts {
     now?: () => number;
 }
 const RETURN_ORIGINAL_STATUS_TIMEOUT_MS = 20_000;
+const RETURN_ORIGINAL_STATUS_BUDGET_MS = RETURN_ORIGINAL_STATUS_TIMEOUT_MS * 2;
+const RETURN_ORIGINAL_STATUS_POLL_MS = 1500;
+const RETURN_ORIGINAL_STATUS_REFRESHES = 2;
+
+function retryableOriginalStatusError(error: unknown): boolean {
+    const fault = error as Error | undefined;
+    return ['AbortError', 'TimeoutError', 'TypeError', 'NetworkError'].includes(fault?.name || '')
+        || ['FISCAL_WORKFLOW_UNAVAILABLE', 'FISCAL_WORKFLOW_CONTEXT_CHANGED'].includes(fault?.message || '');
+}
+
+function originalReferenceStillPending(parent: FiscalWorkflowStateV2): boolean {
+    if (parent.originalReference || !parent.signature || parent.decision === 'REJECTED'
+        || parent.mode !== 'WORKFLOW' || parent.sourceKind !== 'ORDINARY_SOURCE_V2') return false;
+    return parent.originalReferenceReason === 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE'
+        || (parent.originalReferenceReason === 'FISCAL_ORIGINAL_REFERENCE_NOT_SIGNED_ACCEPTED'
+            && parent.decision === 'PENDING');
+}
 const inflight = new Map<string, Promise<Transaction>>();
 export function createFiscalReturnConsumer(ports: ConsumerPorts) {
     return { async process(original: Transaction, items: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string, seriesId: string, user: {
@@ -160,13 +177,29 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 if(selection&&!a.settlementSelection)a=await store!.save(a,{...a,settlementSelection:selection});
                 const requested=selection?[]:legacyRequested||await legacyPayments();
                 if (!a.checkout) {
-                    const consultOriginal = () => ports.workflow.consult(original.id, undefined, RETURN_ORIGINAL_STATUS_TIMEOUT_MS);
-                    const parent = await consultOriginal().catch(error => {
-                        if (error?.name !== 'AbortError') throw error;
+                    const deadline = Date.now() + RETURN_ORIGINAL_STATUS_BUDGET_MS;
+                    const consultOriginal = () => ports.workflow.consult(original.id, undefined,
+                        Math.max(1, Math.min(RETURN_ORIGINAL_STATUS_TIMEOUT_MS, deadline - Date.now())));
+                    let retriedTransport = false;
+                    const readStatus = async () => {
                         auth.assertCurrent();
-                        // Only retry the authenticated GET. No checkout or ERP preparation exists yet.
-                        return consultOriginal();
-                    });
+                        try {
+                            return await consultOriginal();
+                        } catch (error) {
+                            if (retriedTransport || Date.now() >= deadline || !retryableOriginalStatusError(error)) throw error;
+                            retriedTransport = true;
+                            auth.assertCurrent();
+                            return consultOriginal();
+                        }
+                    };
+                    // Only repeat status GETs before reserving a number or preparing the return.
+                    let parent = await readStatus();
+                    for (let refresh = 0; refresh < RETURN_ORIGINAL_STATUS_REFRESHES
+                        && originalReferenceStillPending(parent) && deadline - Date.now() > RETURN_ORIGINAL_STATUS_POLL_MS; refresh++) {
+                        await new Promise(resolve => setTimeout(resolve, RETURN_ORIGINAL_STATUS_POLL_MS));
+                        if (Date.now() >= deadline) break;
+                        parent = await readStatus();
+                    }
                     const reference = parent.originalReference;
                     returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
                     returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
