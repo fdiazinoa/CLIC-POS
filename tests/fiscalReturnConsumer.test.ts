@@ -446,18 +446,54 @@ for (const consumerFinalE32 of [false, true]) test(`native status and print proo
     const signed = { ...workflow, state: 'SIGNED_PENDING', observationVersion: 1, signature: { schemaVersion: 1, qrUrl: url.href, securityCode: 'ABCDEF', signedAt } };
     assert.equal(await verifyReturnStatus(tx, signed, a, workflow), true);
     assert.match(returnStatusMessage(signed), /pendiente de aceptación/);
-    await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+    const { dbAdapter } = await import('../services/db');
+    const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+    t.mock.method(fiscalWorkflowV2Client, 'cached', (id: string) => f.adapter.fiscalWorkflowStore.readState(id));
+    Object.defineProperty(dbAdapter, 'fiscalReturnStore', { value: f.adapter.fiscalReturnStore, configurable: true });
+    t.after(() => { Reflect.deleteProperty(dbAdapter, 'fiscalReturnStore'); });
+    if (consumerFinalE32) {
+        const { printTicket } = await import('../utils/printer');
+        const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+        const config = { currencySymbol: 'RD$', companyInfo: { name: 'Synthetic' }, receiptConfig: { showQr: true }, currencies: [], taxes: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: 0.18 }] } as any;
+        let begin!: () => void;
+        const started = new Promise<void>(resolve => { begin = resolve; });
+        let signatureAvailable = false;
+        const jobs: string[] = [];
+        t.mock.method(dbAdapter, 'getDocument', async () => tx);
+        t.mock.method(dbAdapter, 'getCollection', async () => []);
+        t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+        t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+            assert.equal(id, tx.id);
+            begin();
+            if (!signatureAvailable) return workflow;
+            await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+            return signed;
+        });
+        t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+            jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+            return true;
+        });
+        t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+        const print = printTicket(tx, config);
+        await started;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(jobs, []);
+        signatureAvailable = true;
+        t.mock.timers.tick(17_000);
+        assert.equal(await print, true);
+        t.mock.timers.reset();
+        assert.equal(jobs.length, 1);
+        assert.match(jobs[0], /ABCDEF/);
+        assert.match(jobs[0], /Pendiente de confirmacion/);
+    } else {
+        await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+    }
     const accepted = { ...signed, state: 'ACCEPTED', decision: 'ACCEPTED', observationVersion: 2 };
     assert.equal(await verifyReturnStatus(tx, accepted, a, signed), true);
     await f.adapter.fiscalWorkflowStore.saveState(tx, accepted, 1);
     assert.equal(await verifyReturnStatus(tx, { ...accepted, buyer: { taxId: '999999999' } }, a), false);
     assert.equal(await verifyReturnStatus(tx, signed, a, accepted), false);
     assert.match(returnStatusMessage(accepted), /aceptada por DGII/);
-    const { dbAdapter } = await import('../services/db');
-    const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-    t.mock.method(fiscalWorkflowV2Client, 'cached', (id: string) => f.adapter.fiscalWorkflowStore.readState(id));
-    Object.defineProperty(dbAdapter, 'fiscalReturnStore', { value: f.adapter.fiscalReturnStore, configurable: true });
-    t.after(() => { Reflect.deleteProperty(dbAdapter, 'fiscalReturnStore'); });
     const display = await resolveFiscalPrintDisplay(tx);
     assert.equal(display?.qrUrl, url.href);
     assert.equal(display?.dgiiAccepted, true);

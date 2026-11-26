@@ -149,6 +149,58 @@ test('MSeller checkout only sends signed tickets to the printer and reuses the c
  assert.equal(jobs[1], jobs[0]);
 });
 
+test('one print request survives both deadlines and coalesces another caller until the pending timbre arrives', async t => {
+ const { printTicket, printIntegratedPaymentArtifacts } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } = await import('../services/sync/LargeMasterSyncV3OperationGate');
+ const { tx, state } = await workflowFixture('21ddc090-03ec-433b-996d-b62f00fde108');
+ const config = { currencySymbol: 'RD$', receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ let started!: () => void;
+ const startedConsult = new Promise<void>(resolve => { started = resolve; });
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async () => { started(); return cached; });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), true);
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+ t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+
+ const request = printTicket(tx, config);
+ await startedConsult;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(consult.mock.callCount(), 1);
+ t.mock.timers.tick(17_000);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), false);
+ assert.deepEqual(jobs, []);
+ assert.equal(printTicket(tx, config), request);
+ const integrated = printIntegratedPaymentArtifacts(tx, config);
+ assert.equal(printIntegratedPaymentArtifacts(tx, config), integrated);
+ const releaseBaseline = reserveLargeMasterSyncV3BaselineMutation();
+ cached = { ...cached, signature: state.signature, state: 'SIGNED_PENDING' };
+ try {
+  t.mock.timers.tick(1500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(jobs, []);
+ } finally {
+  releaseBaseline();
+ }
+
+ assert.equal(await request, true);
+ assert.equal((await integrated).ticketPrinted, true);
+ assert.equal(jobs.length, 1);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+});
+
 test('print readiness survives a transient status error and returns a signed pending timbre', async t => {
  const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
  const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');

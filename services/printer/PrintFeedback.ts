@@ -13,7 +13,7 @@ const failureMessages: Record<string, string> = {
   NETWORK_PRINT_ERROR: 'No se pudo completar el envío a la impresora de red. Revisa su IP y conexión.',
   USB_PRINT_ERROR: 'No se pudo completar el envío USB. Revisa el cable y los permisos de la impresora.',
   UNSUPPORTED_CONNECTION: 'La conexión configurada no es compatible. Revisa Ajustes > Hardware.',
-  MSELLER_SIGNATURE_REQUIRED: 'El comprobante todavía no tiene un timbre de MSeller disponible. Consulta el estado fiscal y vuelve a solicitar la impresión cuando esté disponible la firma.',
+  MSELLER_SIGNATURE_REQUIRED: 'La consulta del timbre de MSeller se detuvo. Revisa el estado fiscal del comprobante en el historial.',
 };
 
 export class PrintOutputError extends Error {

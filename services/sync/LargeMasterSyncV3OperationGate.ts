@@ -88,6 +88,9 @@ export const isLargeMasterSyncV3PaymentHeld = (): boolean => activeOperations.ha
 export const waitForLargeMasterSyncV3Payment = (signal?: AbortSignal): Promise<number> =>
   waitForOperationWindow(isLargeMasterSyncV3PaymentHeld, signal);
 
+export const waitForLargeMasterSyncV3BaselineMutation = (): Promise<number> =>
+  waitForOperationWindow(() => baselineMutationReserved);
+
 export const resetLargeMasterSyncV3OperationGateForTests = (): void => {
   activeOperations.clear();
   baselineMutationReserved = false;
