@@ -45,6 +45,23 @@ test('V3 scope stays stable when a terminal refresh only reorders object fields'
   assert.notEqual(v3OperationalConfigContext(refreshed, { localTerminalId: 'T' }).key, expected);
 });
 
+test('advancing fiscal cursors keeps the authority scope while grant changes invalidate it', () => {
+  const fiscal = {
+    fiscalRanges: [{ currentGlobal: 20, validUntil: '2026-12-01' }],
+    fiscalAllocations: [{ nextNumber: 10, reservedEnd: 20 }],
+  };
+  const config = { terminals: [{ id: 'T', config: { fiscal } }] } as any;
+  const snapshot = () => v3OperationalConfigContext(config, { localTerminalId: 'T' });
+  const before = snapshot();
+  fiscal.fiscalRanges[0].currentGlobal++;
+  fiscal.fiscalAllocations[0].nextNumber++;
+  assert.equal(snapshot().scope, before.scope);
+  assert.equal(snapshot().checkoutKey, before.checkoutKey);
+  fiscal.fiscalAllocations[0].reservedEnd++;
+  assert.notEqual(snapshot().scope, before.scope);
+  assert.notEqual(snapshot().checkoutKey, before.checkoutKey);
+});
+
 test('actual native session renews normalized metadata once; old session rejects, no downloads or financial writes', async () => {
   const f = await fixture(); try {
     const old = await f.module.getLargeMasterSyncV3OperationalSession();
@@ -57,6 +74,36 @@ test('actual native session renews normalized metadata once; old session rejects
     assert.strictEqual(await f.module.getLargeMasterSyncV3OperationalSession(), sessions[0], 'first ordinary financial getter observes published B');
     await assert.rejects(old.assertCurrent(), /BINDING_CHANGED/);
     assert.deepEqual(f.state(), before); assert.equal(f.env.downloads, 0);
+  } finally { f.close(); }
+});
+
+test('retained refund session reopens on the same request after SQLite configuration refresh', async () => {
+  const f = await fixture(); try {
+    const stale = await f.module.getLargeMasterSyncV3RetainedSession();
+    const next = structuredClone(f.env.config);
+    next.terminals[0].config.pricing.tariffs[0].isDefault = true;
+    await f.adapter.saveCollection('config', next);
+    await assert.rejects(stale.assertCurrent(), { code: 'SYNC_V3_BINDING_CHANGED', bindingReason: 'CONFIG_SCOPE' });
+    const before = f.state();
+    const session = await f.module.getLargeMasterSyncV3RetainedSession();
+    assert.notStrictEqual(session, stale);
+    assert.equal(session.binding, stale.binding);
+    await session.assertCurrent();
+    assert.equal(f.env.downloads, 0);
+    assert.deepEqual(f.state(), before);
+  } finally { f.close(); }
+});
+
+test('retained refund session does not repair a change of store', async () => {
+  const f = await fixture(); try {
+    await f.module.getLargeMasterSyncV3RetainedSession();
+    const next = structuredClone(f.env.config);
+    next.terminals[0].config.erpBinding.storeId = id(999);
+    await f.adapter.saveCollection('config', next);
+    const opens = f.opens();
+    await assert.rejects(f.module.getLargeMasterSyncV3RetainedSession(), { code: 'SYNC_V3_BINDING_CHANGED', bindingReason: 'OWNER' });
+    assert.equal(f.opens(), opens);
+    assert.equal(f.env.downloads, 0);
   } finally { f.close(); }
 });
 

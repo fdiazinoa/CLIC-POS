@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import { planV3CartReanchor } from '../services/sync/LargeMasterSyncV3CartReanchor';
 import type { BusinessConfig, Product } from '../types';
-import { acquireLargeMasterSyncV3ConfigContext, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession, isRecoverableV3SessionRead, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
 import type { LargeMasterSyncV3OperationalCatalog, V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import { reconcileV3TariffSelection, v3TariffContextKey, isV3TariffContextCurrent,
   type V3TariffSelection } from '../services/sync/LargeMasterSyncV3TariffSelection';
@@ -134,10 +134,15 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   try { reconciled = reconcileV3TariffSelection(selection, authority, props.cart.length > 0); }
   catch (reason) { authorityError = String((reason as Error).message || reason); }
   const tariffId = reconciled?.tariffId || '';
-  let configScope = '';
-  try { configScope = v3OperationalConfigContext(props.config, { localTerminalId: props.activeTerminalId || '' }).key; }
+  let configScope = '', checkoutScope = '';
+  try {
+    const context = v3OperationalConfigContext(props.config, { localTerminalId: props.activeTerminalId || '' });
+    configScope = context.key;
+    checkoutScope = context.checkoutKey;
+  }
   catch (reason) { authorityError = String((reason as Error).message || reason); }
   const wantedContextKey = JSON.stringify([authorityKey, tariffId, configScope]);
+  const checkoutContextKey = JSON.stringify([tariffId, checkoutScope]);
   const observedContextKey = useRef(wantedContextKey);
   useEffect(() => {
     if (observedContextKey.current !== wantedContextKey) {
@@ -147,6 +152,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   }, [wantedContextKey]);
   const latestContextKey = useRef(wantedContextKey);
   latestContextKey.current = authorityError ? '' : wantedContextKey;
+  const latestCheckoutContext = useRef(checkoutContextKey);
+  latestCheckoutContext.current = authorityError ? '' : checkoutContextKey;
   const [loadedContextKey, setLoadedContextKey] = useState('');
   const acquisition = useRef<{ config: BusinessConfig; key: string; phase: 'pending' | 'failed' | 'ready' }>();
   const [configRetryRevision, setConfigRetryRevision] = useState(0);
@@ -233,7 +240,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
         taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
     };
     const assertPaymentContext = () => {
-      if (!mounted.current || presentation !== latestPresentation.current || latestContextKey.current !== wantedContextKey) {
+      if (!mounted.current || presentation !== latestPresentation.current || latestCheckoutContext.current !== checkoutContextKey) {
         throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       }
     };
@@ -312,7 +319,17 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     validateCheckout: async (lines, reference) => {
       assertPaymentContext();
       // A catalog repaint can retire the UI reader while the native sale authority is still valid.
-      await validateNativeCheckout(lines, reference);
+      try {
+        await validateNativeCheckout(lines, reference);
+      } catch (error) {
+        if (!isRecoverableV3SessionRead(error)) throw error;
+        assertPaymentContext();
+        const current = await getLargeMasterSyncV3OperationalSession();
+        assertPaymentContext();
+        if (current === session || current.binding !== session.binding) throw error;
+        const config = await current.projectConfig(latestProps.current.config);
+        await current.validate(config, lines, tariffId, warehouseId, 'SALE', undefined, reference);
+      }
       assertPaymentContext();
     },
     completedReservation: async (source,lines,customerId) => { assertContext(); const transaction = await readV3CompletedReservation({reservationId:source.id,claimId:`reservation:${source.id}`,expectedSource:source,lines,customerId}); assertContext(); return transaction; },
@@ -330,7 +347,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       latestContextKey.current = '';
       setSelection({ ...authority, tariffId: id, mode: 'manual' });
     },
-  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError, presentation, catalogRevision, resumePending]);
+  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, checkoutContextKey, authorityError, presentation, catalogRevision, resumePending]);
 
   useEffect(() => {
     if (!boundary || !props.cart.length) return;

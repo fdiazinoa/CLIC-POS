@@ -1,4 +1,4 @@
-import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
+import { v3ConfigScopeChangeReason, v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
 import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
 import {resolveSyncTarget} from './SyncProfile';
@@ -82,7 +82,9 @@ export class LargeMasterSyncV3OperationalSession {
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
       const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
       if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'ORIGIN');
-      if(currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+      if (currentScope !== expectedScope) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, v3ConfigScopeChangeReason(expectedScope, currentScope));
+      }
       try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CREDENTIAL');}
       catch(error){
         // Download/activation owns its SQL connection and retains live transport authority.
@@ -249,9 +251,13 @@ export class LargeMasterSyncV3OperationalSession {
       if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=local;
     }
-    if(this.expectedConfigScope!==undefined){
-    const config=await db.get('config') as unknown as BusinessConfig;
-    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+    if (this.expectedConfigScope !== undefined) {
+      const config = await db.get('config') as unknown as BusinessConfig;
+      const currentScope = v3OperationalConfigContext(config, this.identity).scope;
+      if (currentScope !== this.expectedConfigScope) {
+        const reason = v3ConfigScopeChangeReason(this.expectedConfigScope, currentScope);
+        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, reason);
+      }
     }
     const { active, inventory, owner } = this.store.readOperationalSnapshot
       ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
@@ -539,25 +545,41 @@ export class LargeMasterSyncV3OperationalSession {
   }
 }
 
+const readSessionScope = () => {
+  const proof = readOperationalCatalogBindingProof();
+  const origin = largeMasterSyncV3DownloadOrigin();
+  try {
+    const identity = readLargeMasterSyncV3BoundIdentity();
+    return JSON.stringify([v3BindingKey(identity, origin), identity.syncToken, proof]);
+  } catch {
+    return JSON.stringify(['offline-observation', proof, resolveSyncTarget().baseUrl, origin]);
+  }
+};
+
+const openCachedSession = (_refresh: boolean, metric?: (metric: LargeMasterSyncV3Metric) => void) =>
+  LargeMasterSyncV3OperationalSession.open(false, metric, true);
+
+export const isRecoverableV3SessionRead = (error: unknown): boolean => {
+  const failure = error as Partial<LargeMasterSyncV3Error> | null;
+  return failure?.code === 'SYNC_V3_UI_CONTEXT_CHANGED' || failure?.code === 'SYNC_V3_RUNTIME_VERSION_CHANGED'
+    || (failure?.code === 'SYNC_V3_BINDING_CHANGED' && failure.bindingReason === 'CONFIG_SCOPE');
+};
+
+const cachedSessionRecovery = { openCached: openCachedSession, canReopen: isRecoverableV3SessionRead };
 export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
   (refresh, metric) => LargeMasterSyncV3OperationalSession.open(refresh, metric),
-  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
-    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
+  readSessionScope,
+  cachedSessionRecovery,
 );
 
 /** Reversal path: reuse the active runtime and never negotiate a master. A credit note reverses a
  * document that was already issued, so refreshing the catalog must never decide whether it prints.
- * Its coordinator cache is independent from the operational one, so a sync that moved the runtime
- * makes the first call fail closed; that single case reopens once instead of surfacing a raw code. */
-const retainedSessionCoordinator = createLargeMasterSyncV3SessionCoordinator(
-  (_refresh, metric) => LargeMasterSyncV3OperationalSession.open(false, metric, true),
-  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
-    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
+ * Its separate cache may reopen the active SQLite snapshot when the runtime or config moves. */
+export const getLargeMasterSyncV3RetainedSession = createLargeMasterSyncV3SessionCoordinator(
+  openCachedSession,
+  readSessionScope,
+  cachedSessionRecovery,
 );
-export const getLargeMasterSyncV3RetainedSession = ((refresh?: boolean) => retainedSessionCoordinator(refresh).catch(error => {
-  if ((error as { code?: string })?.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED') throw error;
-  return retainedSessionCoordinator(refresh);
-})) as typeof retainedSessionCoordinator;
 
 export const acquireLargeMasterSyncV3ConfigContext = (config: BusinessConfig, localTerminalId: string) =>
   LargeMasterSyncV3OperationalSession.acquireConfigContext(config, localTerminalId);
