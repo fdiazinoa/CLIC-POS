@@ -275,10 +275,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       })).then(rows => { if (isCurrent()) remember(rows.filter((row): row is NonNullable<typeof row> => row !== null)); }).catch(() => undefined);
       return outcome.lines;
     },
-    validate: async (lines, reference) => {
+    validate: async (lines, reference, forCartAdd) => {
       assertContext();
       await session.validate({ ...latestProps.current.config, tariffs: projected.tariffs,
-        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
+        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference, false, undefined, forCartAdd);
       assertContext();
     },
     completedReservation: async (source,lines,customerId) => { assertContext(); const transaction = await readV3CompletedReservation({reservationId:source.id,claimId:`reservation:${source.id}`,expectedSource:source,lines,customerId}); assertContext(); return transaction; },

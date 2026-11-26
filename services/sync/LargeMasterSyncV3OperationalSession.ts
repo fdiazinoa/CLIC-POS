@@ -238,7 +238,7 @@ export class LargeMasterSyncV3OperationalSession {
     }
   }
 
-  async assertCurrent(): Promise<void> {
+  async assertCurrent(forCartAdd = false): Promise<void> {
     assertLargeMasterSyncV3NativeAndroid();
     try{
       const current=readLargeMasterSyncV3BoundIdentity();
@@ -249,13 +249,23 @@ export class LargeMasterSyncV3OperationalSession {
       if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=local;
     }
-    if(this.expectedConfigScope!==undefined){
-    const config=await db.get('config') as unknown as BusinessConfig;
-    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+    const combined = forCartAdd && this.expectedConfigScope !== undefined
+      ? await this.store.readOperationalSnapshot?.(this.ready.runtime.version, true)
+      : undefined;
+    const configTerminals = combined?.configTerminals;
+    if (this.expectedConfigScope !== undefined) {
+      const config = configTerminals
+        ? { terminals: configTerminals }
+        : await db.get('config') as unknown as BusinessConfig;
+      if (v3OperationalConfigContext(config, this.identity).scope !== this.expectedConfigScope) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE');
+      }
     }
-    const { active, inventory, owner } = this.store.readOperationalSnapshot
-      ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
-      : {
+    const { active, inventory, owner } = configTerminals && combined
+      ? combined
+      : this.store.readOperationalSnapshot
+        ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
+        : {
         active: await this.store.getActiveRuntimeVersion(),
         inventory: await this.ready.runtime.getInventorySnapshotVersion(),
         owner: await this.store.getOperationalOwner!(),
@@ -412,8 +422,8 @@ export class LargeMasterSyncV3OperationalSession {
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
     intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false,
-    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void): Promise<V3RetainedContext | undefined> {
-    await this.assertCurrent();
+    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void, forCartAdd = false): Promise<V3RetainedContext | undefined> {
+    await this.assertCurrent(forCartAdd);
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
     if(!fiscalDeliveryOnly&&lines.some(line=>line.inventoryPresentation!==undefined)){if(intent==='REFUND')throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');presentationProof=await this.presentationProof(config,lines);}
@@ -506,7 +516,7 @@ export class LargeMasterSyncV3OperationalSession {
         if((demand.get(line.id) || 0)>stock.stock)throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
       }
     }
-    await this.assertCurrent();
+    await this.assertCurrent(forCartAdd);
     return retained;
   }
 
