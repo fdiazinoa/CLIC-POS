@@ -90,6 +90,24 @@ try{
   f.unchanged(retained);
   results.push('credential renewal waits for the payment boundary and retains the ticket');
  }finally{await f.close();}}
+ {const f=await fixture();try{
+  const retained=env.child.retained, original=env.child.props.v3Operational, replacement=defer();
+  env.outcomes.push({acquire:replacement.promise});
+  await f.event();
+  const repainting=env.child.props.v3Operational;
+  await assert.rejects(original.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  await assert.rejects(repainting.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  await original.validateCheckout(f.lines);
+  await repainting.validateCheckout(f.lines);
+  env.validIdentity=false;
+  await assert.rejects(original.validateCheckout(f.lines),/BINDING_CHANGED/);
+  env.validIdentity=true;
+  await act(async()=>replacement.resolve());await settle();
+  f.unchanged(retained);
+  await f.update({erpBinding:{storeId:'other-store'}});
+  await assert.rejects(original.validateCheckout(f.lines),/UI_CONTEXT_CHANGED/);
+  results.push('checkout survives visual catalog replacement and still rejects native or store authority changes');
+ }finally{await f.close();}}
  // New props before rejection: replacement succeeds; the retired catch cannot overwrite it.
  {const f=await fixture();try{
   const retained=env.child.retained,old=env.child.props.v3Operational,gate=defer();

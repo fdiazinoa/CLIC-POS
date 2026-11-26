@@ -10,7 +10,7 @@ import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/Large
 import { isLargeMasterSyncV3PaymentHeld, waitForLargeMasterSyncV3Payment } from '../services/sync/LargeMasterSyncV3OperationGate';
 import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import { planV3CartReanchor } from '../services/sync/LargeMasterSyncV3CartReanchor';
 import type { BusinessConfig, Product } from '../types';
@@ -31,6 +31,11 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   const catalog = useRef<LargeMasterSyncV3OperationalCatalog>();
   const querySequence = useRef(0);
   const contextSequence = useRef(0);
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: { ids: readonly string[]; aliases: readonly string[] } }>({ query: '', categoryId: null });
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
@@ -223,6 +228,15 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       if (presentation !== latestPresentation.current || pinnedContext !== contextSequence.current || pinnedSource !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       if (latestContextKey.current !== wantedContextKey) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
     };
+    const validateNativeCheckout: V3OperationalPOSBoundary['validate'] = async (lines, reference) => {
+      await session.validate({ ...latestProps.current.config, tariffs: projected.tariffs,
+        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
+    };
+    const assertPaymentContext = () => {
+      if (!mounted.current || presentation !== latestPresentation.current || latestContextKey.current !== wantedContextKey) {
+        throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      }
+    };
     return {
     tariffId,
     liveInventory: pinnedSource.liveInventory,
@@ -292,9 +306,14 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     },
     validate: async (lines, reference) => {
       assertContext();
-      await session.validate({ ...latestProps.current.config, tariffs: projected.tariffs,
-        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
+      await validateNativeCheckout(lines, reference);
       assertContext();
+    },
+    validateCheckout: async (lines, reference) => {
+      assertPaymentContext();
+      // A catalog repaint can retire the UI reader while the native sale authority is still valid.
+      await validateNativeCheckout(lines, reference);
+      assertPaymentContext();
     },
     completedReservation: async (source,lines,customerId) => { assertContext(); const transaction = await readV3CompletedReservation({reservationId:source.id,claimId:`reservation:${source.id}`,expectedSource:source,lines,customerId}); assertContext(); return transaction; },
     expireReservation: async id => { assertContext(); const expired = await expireV3Reservation(id); assertContext(); return expired; },
@@ -381,6 +400,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       categories: lastBoundary.current?.categories || categories,
       // Read searches wait for the replacement boundary; mutations still reject.
       search: async () => {}, resolveCode: rejectAsync, validate: rejectAsync, changeTariff: reject,
+      validateCheckout: lastBoundary.current?.validateCheckout || rejectAsync,
       completedReservation: rejectAsync, expireReservation: rejectAsync, restoreReservation: rejectAsync,
       restoreRetainedTicket: rejectAsync, updateRetainedTicket: rejectAsync, waitingTickets: rejectAsync };
   }, [wantedContextKey, authorityError, error, boundary]);

@@ -2,6 +2,9 @@ import type { BusinessConfig } from '../../types';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 type Selector = { localTerminalId?: string; terminalId?: string; deviceId?: string; tenantId?: string };
+const sortObjectKeys = (_key: string, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+  ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left === right ? 0 : 1))
+  : value;
 /** The complete immutable authority scope; presentation metadata is intentionally retained. */
 export function v3OperationalConfigContext(config: BusinessConfig, selector: Selector) {
   const matches = config?.terminals?.filter(row =>
@@ -12,7 +15,7 @@ export function v3OperationalConfigContext(config: BusinessConfig, selector: Sel
   if (matches?.length !== 1) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
   const terminal = matches[0];
   const scope = JSON.stringify([terminal.config.erpBinding?.companyId, terminal.config.erpBinding?.storeId,
-    terminal.config.inventoryScope, terminal.config.pricing, terminal.config.fiscal]);
+    terminal.config.inventoryScope, terminal.config.pricing, terminal.config.fiscal], sortObjectKeys);
   return { terminal, scope, key: JSON.stringify([terminal.id, terminal.config.currentDeviceId,
     terminal.config.erpTerminalId, terminal.config.erpBinding?.tenantId, scope]) };
 }

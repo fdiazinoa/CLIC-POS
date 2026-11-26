@@ -34,6 +34,17 @@ test('shared fingerprint retains complete metadata and rejects missing/ambiguous
   assert.throws(() => v3OperationalConfigContext(config, { localTerminalId: 'T' }), /BINDING_CHANGED/);
 });
 
+test('V3 scope stays stable when a terminal refresh only reorders object fields', () => {
+  const first: any = { terminals: [{ id: 'T', config: { fiscal: { mode: 'ECF', environment: 0 },
+    pricing: { defaultTariffId: 'A', allowedTariffIds: ['A', 'B'] } } }] };
+  const refreshed: any = { terminals: [{ id: 'T', config: { fiscal: { environment: 0, mode: 'ECF' },
+    pricing: { allowedTariffIds: ['A', 'B'], defaultTariffId: 'A' } } }] };
+  const expected = v3OperationalConfigContext(first, { localTerminalId: 'T' }).key;
+  assert.equal(v3OperationalConfigContext(refreshed, { localTerminalId: 'T' }).key, expected);
+  refreshed.terminals[0].config.fiscal.environment = 1;
+  assert.notEqual(v3OperationalConfigContext(refreshed, { localTerminalId: 'T' }).key, expected);
+});
+
 test('actual native session renews normalized metadata once; old session rejects, no downloads or financial writes', async () => {
   const f = await fixture(); try {
     const old = await f.module.getLargeMasterSyncV3OperationalSession();
