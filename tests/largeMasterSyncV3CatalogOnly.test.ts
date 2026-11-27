@@ -103,14 +103,16 @@ test('traced V3 add batches the initial snapshot, article and exact tariff price
     await hold;
     assert.deepEqual(await reading, legacy);
     assert.deepEqual(Object.keys(trace.stages).filter(stage => stage.startsWith('ADD_CATALOG_PRIMARY_')), [...stages]);
-    assert.equal(queries.length, 4); // Combined primary read, balance, variants and final snapshot.
+    assert.equal(queries.length, 3); // Primary read, combined balance and variants, final snapshot.
+    assert.match(queries[1], /master_v3_inventory_balances/);
+    assert.match(queries[1], /master_v3_variants/);
     assert.match(queries[0], /WITH inventory AS/);
     assert.match(queries[0], /master_v3_articles[\s\S]*master_v3_prices/);
     assert.ok(trace.stages.ADD_CATALOG_SNAPSHOT_AFTER_END !== undefined);
 
     queries.length = 0;
     assert.deepEqual(await catalog.get('P', undefined, true), legacy);
-    assert.equal(queries.length, 4);
+    assert.equal(queries.length, 3);
 
     const read = (articleId: string, tariffId: string) =>
       f.adapter.masterSyncV3Store.readOperationalCatalogSale(runtime.version, articleId, tariffId);
@@ -464,7 +466,7 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
    '../../utils/db':'export const db=globalThis.__sessionFence.db;','../db':'export const dbAdapter=globalThis.__sessionFence.adapter;',
    './LargeMasterSyncV3Authority':'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;',
    './LargeMasterSyncV3CanaryFacade':'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=value=>value;',
-   './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";export const readOperationalCatalogBindingProof=()=>null;',
+   './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";export const readOperationalCatalogBindingProof=()=>null;export const TERMINAL_SESSION_RENEWED_EVENT="terminalSessionRenewed";',
    './LargeMasterSyncV3Platform':'export const assertLargeMasterSyncV3NativeAndroid=()=>{};',
    './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__sessionFence.state.origin;',
    './LargeMasterSyncV3BoundTransport':`export const readLargeMasterSyncV3BoundIdentity=()=>({...globalThis.__sessionFence.state.identity});export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;

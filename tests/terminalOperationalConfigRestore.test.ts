@@ -146,6 +146,7 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
   const storage = new Map<string, string>();
   const deps = {
     receivePosSecurityV2: async () => undefined,
+    publishV3SalesConfig: (_terminal: string, _previous: unknown, _current: unknown, save: () => Promise<void>) => save(),
     freezeCount() {}, freezePhase() {}, protectsLocalCatalogFromCloud: () => false,
     measureSettingsReturnQa: (_: string, work: () => Promise<unknown>) => work(),
     markSettingsReturnQa: (name: string) => marks.push(name), terminalConfigChangedSections,

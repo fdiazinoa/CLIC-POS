@@ -29,8 +29,18 @@ test('cashier without void permission can see supervisor above RefundModal and c
  const hookSource=readFileSync(new URL('../hooks/useSupervisorAuth.ts',import.meta.url),'utf8');
  const code=(await transform(hookSource.slice(hookSource.indexOf('export const useSupervisorAuth')).replace('export const','const'),{loader:'ts'})).code;
  const cells:any[]=[];let cursor=0;const useState=(initial:any)=>{const index=cursor++;if(!(index in cells))cells[index]=initial;return[cells[index],(value:any)=>{cells[index]=value;}];};
- const create=new Function('useState','useCallback','requiresTerminalPolicyPin','canGrantDiscountPercent',`${code};return useSupervisorAuth;`);
- const hook=create(useState,(fn:any)=>fn,()=>false,()=>false),staff:any={id:'staff',roleId:'cashier'},supervisor:any={id:'supervisor',roleId:'supervisor',pin:'9999'};
+ const useRef=(initial:any)=>{const index=cursor++;return cells[index]??={current:initial};};
+ const useEffect=(effect:()=>unknown)=>{const index=cursor++;if(!(index in cells))cells[index]=effect();};
+ const security=await import('../services/sync/PosSecurityV2Runtime');
+ const guards=await import('../utils/supervisorAuthorizationGuard');
+ const deps={
+  useState,useRef,useEffect,useCallback:(fn:any)=>fn,requiresTerminalPolicyPin:()=>false,canGrantDiscountPercent:()=>false,
+  isReturnPermission:security.isReturnPermission,paidReturnAuthorizationKey:guards.paidReturnAuthorizationKey,
+  confirmCurrentAuthorization:guards.confirmCurrentAuthorization,
+  permissionService:{getTerminalId:()=> 'test'},dbAdapter:{},
+  buildAuthorizationLog:()=>({id:'authorization'}),persistAuthorizationLog:async()=>undefined,
+ };
+ const hook=new Function(...Object.keys(deps),`${code};return useSupervisorAuth;`)(...Object.values(deps)),staff:any={id:'staff',roleId:'cashier'},supervisor:any={id:'supervisor',roleId:'supervisor',pin:'9999'};
  const roles:any=[{id:'cashier',permissions:[]},{id:'supervisor',permissions:['POS_VOID_PAID_TICKET']}],props:any={config:{auditLogs:[]},currentUser:staff,roles,onUpdateConfig:()=>{}};
  const renderHook=()=>{cursor=0;return hook(props);};let auth=renderHook(),effects=0;
  const refund=await handler(async()=>{const approved=await auth.requestApproval({permission:'POS_VOID_PAID_TICKET',actionDescription:'Return'});if(approved)effects++;});
@@ -44,8 +54,8 @@ test('cashier without void permission can see supervisor above RefundModal and c
  const supervisorSource=readFileSync(new URL('../components/SupervisorModal.tsx',import.meta.url),'utf8');
  const segment=supervisorSource.slice(supervisorSource.indexOf('    const handleAuthorize ='),supervisorSource.indexOf('\n    return ('));
  const authorizeCode=(await transform(segment,{loader:'ts'})).code;
- const authorize=new Function('f',`const {users,roles,pin,requiredPermission,requestedDiscountPercent,onAuthorize,setPin,setError}=f;${authorizeCode};return handleAuthorize;`)({users:[staff,supervisor],roles,pin:'9999',requiredPermission:'POS_VOID_PAID_TICKET',onAuthorize:auth.supervisorModalProps.onAuthorize,setPin:()=>{},setError:()=>{}});
- authorize();await approved;assert.equal(effects,1);assert.equal(refund.ref.current,false);assert.equal(renderHook().supervisorModalProps.isOpen,false);
+ const authorize=new Function('f',`const {users,roles,pin,requiredPermission,requestedDiscountPercent,onAuthorize,setPin,setError,isReturnPermission}=f;${authorizeCode};return handleAuthorize;`)({users:[staff,supervisor],roles,pin:'9999',requiredPermission:'POS_VOID_PAID_TICKET',onAuthorize:auth.supervisorModalProps.onAuthorize,setPin:()=>{},setError:()=>{},isReturnPermission:security.isReturnPermission});
+ await authorize();await approved;assert.equal(effects,1);assert.equal(refund.ref.current,false);assert.equal(renderHook().supervisorModalProps.isOpen,false);
 });
 
 test('an unavailable quantity never starts a refund',async()=>{

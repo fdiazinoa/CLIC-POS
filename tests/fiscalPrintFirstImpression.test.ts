@@ -100,12 +100,14 @@ test('el presupuesto de espera mantiene default 8 s, amplía hasta 60 s y nunca 
   assert.equal(resolveFiscalPrintBudget(Number.NaN), 8000);
 });
 
-test('printer y PaymentModal cablean 10 s sólo en la primera impresión; el historial conserva 8 s', () => {
+test('la primera impresión pasa su presupuesto sin cambiar el de historial ni imprimir MSeller sin firma', () => {
   const printer = readFileSync(new URL('../utils/printer.ts', import.meta.url), 'utf8');
   assert.match(printer, /fiscalWaitMs\?: number/);
-  assert.match(printer, /const fiscalWaitMs=options\.fiscalWaitMs\?\?DEFAULT_FISCAL_PRINT_WAIT_MS/);
-  assert.match(printer, /resolveFiscalPrintReadiness\(transaction,\{timeoutMs:fiscalWaitMs\}\)/);
-  assert.match(printer, /if\(!fiscalPrint\)options\.onFiscalPending\?\.\(\);/, 'la versión genérica avisa una sola vez');
+  assert.match(printer, /resolveFiscalPrintReadiness\(transaction,\s*\{\s*waitForSignature, useRealtimeHint, timeoutMs: useRealtimeHint \? undefined : options\.fiscalWaitMs/);
+  const signatureGuard = printer.indexOf("throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED')");
+  const legacyFallback = printer.indexOf('if (!fiscalPrint) options.onFiscalPending?.()');
+  assert.ok(signatureGuard >= 0 && signatureGuard < legacyFallback);
+  assert.match(printer, /if \(waitForSignature && !isVerifiedFiscalPrintDisplay\(fiscalPrint\)\)/);
 
   const payment = readFileSync(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8');
   assert.match(payment, /fiscalWaitMs: 10000/);

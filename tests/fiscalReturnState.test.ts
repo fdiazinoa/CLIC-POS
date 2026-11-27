@@ -51,7 +51,7 @@ test('cableado: App marca pendiente, el store anula sólo con APPLIED_ERP y prin
   assert.match(store, /settleOriginalReturnAnnulment\(original\)/);
   assert.match(store, /APPLIED_ERP/);
   const printer = readFileSync(new URL('../utils/printer.ts', import.meta.url), 'utf8');
-  assert.match(printer, /decideFiscalReturnPrint\(transaction,Boolean\(fiscalPrint&&isVerifiedFiscalPrintDisplay\(fiscalPrint\)\)\)/);
+  assert.match(printer, /decideFiscalReturnPrint\(transaction,\s*isVerifiedFiscalPrintDisplay\(fiscalPrint\)\)/);
   assert.match(printer, /FISCAL_RETURN_SIGNED_QR_REQUIRED/);
   const consumer = readFileSync(new URL('../services/fiscal/FiscalReturnConsumer.ts', import.meta.url), 'utf8');
   assert.match(consumer, /active\?\.phase === 'COMMITTED' && active\.committedSource/, 'el reintento devuelve la NC archivada, nunca crea una segunda');

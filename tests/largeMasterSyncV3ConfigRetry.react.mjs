@@ -218,7 +218,7 @@ try{
   assert.equal(env.requests.length,5);
   assert.equal(f.renderer.root.findAllByProps({'data-pos':true}).length,0);
   assert.ok(f.text().includes('SYNC_V3_BINDING_CHANGED'));
-  assert.deepEqual(f.renderer.root.findByType('button').children,['Abrir ajustes']);
+  assert.deepEqual(f.renderer.root.findAllByType('button').map(button=>button.children.join('')),['Reintentar','Abrir ajustes']);
   await f.update({settingsSuspended:true});
   await f.update({settingsSuspended:false});
   assert.equal(env.requests.length,6);

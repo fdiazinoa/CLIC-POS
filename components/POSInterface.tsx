@@ -7435,10 +7435,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
    const beforeV3PaymentEffects = async (paymentIds:string[]=[],paymentMethods:string[]=[],voluntaryTip=0): Promise<PaymentEffectsFence> => {
       recordCheckoutDiagnostic('PREP_ENTRY');
-      // Authority and offline readiness are independent read-only checks; start both before the
-      // receipt lookups so the finalize does not serialize ~9 s of ERP round-trips.
-      const authorityCheckPromise=assertCheckoutFiscalAuthority();authorityCheckPromise.catch(()=>undefined);
-      const offlineReadyPromise=fiscalWorkflowV2Client.offlineReady?.()||Promise.resolve(false);offlineReadyPromise.catch(()=>undefined);
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
       const receipt=await resolveCommittedFiscalReceipt(paymentIds);
@@ -7472,6 +7468,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(dispatchCheckout&&voluntaryTip!==0)throw Error('DISPATCH_SERVICE_CHARGE_NOT_READY');
       if(dispatchCheckout&&(!dbAdapter.readDispatchCheckoutAuthority||!dbAdapter.prepareDispatchPrecharge||!dbAdapter.markDispatchEffectPossible||!v3Operational))throw Error('El despacho requiere la base local nativa y sus cupos instalados antes de cobrar.');
       recordCheckoutDiagnostic('PREP_AUTHORITY_START');
+      // Only a new checkout needs these reads. Start them together after receipt recovery.
+      const authorityCheckPromise = assertCheckoutFiscalAuthority();
+      const offlineReadyPromise = fiscalWorkflowV2Client.offlineReady?.() || Promise.resolve(false);
+      void offlineReadyPromise.catch(() => undefined);
       await authorityCheckPromise;
       recordCheckoutDiagnostic('PREP_AUTHORITY_DONE');
       // A native attempt bound to another cart can never be resumed; release it here so the

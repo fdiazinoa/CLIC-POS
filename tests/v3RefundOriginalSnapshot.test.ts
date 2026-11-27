@@ -111,7 +111,7 @@ test('validate only demands a live baseline for sales', () => {
   const src = session();
   assert.match(src, /const refund = intent === 'REFUND';/);
   assert.match(src, /!refund && \(authority\.inventoryVersion !== this\.ready\.inventoryVersion/);
-  assert.match(src, /const anchor = refund \? v3RefundAnchor\(authority!\) :/);
+  assert.match(src, /if \(refund\) return v3RefundAnchor\(authority\);/);
   assert.match(src, /if \(old\.length !== 1\) throw new LargeMasterSyncV3Error\('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED'\)/);
   assert.match(src, /if \(!refund\) throw new LargeMasterSyncV3Error\('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED'\)/);
   // The notice is human-readable because it lands in the ERP journal NOTA.
