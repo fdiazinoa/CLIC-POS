@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import {issuedBaseLine} from '../dispatch/IssuedDispatchBaseLine';
 import {canonicalDispatchJSON} from './CompanyDispatchEscrowStore';
 import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../fiscal/DopFiscalSettlement';
@@ -142,16 +143,27 @@ async function canRestoreRetainedBlockMarker(
 
  return await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix)===buffer.currentNumber;
 }
-export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
+export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string,checkedConfig?:BusinessConfig){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
  if(!members.length)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let expired=false;
- const config=await document<BusinessConfig>(sql,'config','current');
+ const config=checkedConfig ?? await document<BusinessConfig>(sql,'config','current');
  for(const member of members){try{assertAllocationMemberTime(member,time);}catch{expired=true;continue;}
-  const allocation=await document<FiscalAllocation>(sql,'fiscalAllocations',member.allocationId),range=await document<FiscalRangeDGII>(sql,'fiscalRanges',member.fiscalRangeId);
+  const documents = (await measureSettingsReturnQa('fiscal.allocationMemberRead', () => sql.query(`
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='fiscalAllocations' AND doc_id=?
+    UNION ALL
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='fiscalRanges' AND doc_id=?
+    UNION ALL
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?
+  `, [member.allocationId, member.fiscalRangeId, member.allocationId]))).values || [];
+  const allocationRow = documents.find(document => document.collection_name === 'fiscalAllocations');
+  const rangeRow = documents.find(document => document.collection_name === 'fiscalRanges');
+  if (!allocationRow || !rangeRow) allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+  const allocation: FiscalAllocation = JSON.parse(allocationRow.data);
+  const range: FiscalRangeDGII = JSON.parse(rangeRow.data);
   if(allocation.terminalId!==authority.scope.terminalId||!['ACTIVE','EXHAUSTED'].includes(allocation.status)||allocation.releasedAt||allocation.reservedStart!==member.start||allocation.reservedEnd!==member.end||allocation.fiscalRangeId!==member.fiscalRangeId||range.isActive!==true||range.type!==type||range.prefix!==member.prefix||range.startNumber!==member.rangeStart||range.endNumber!==member.rangeEnd||(range.expiryDate||null)!==member.expiryDate)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
-  const buffers=(await sql.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
+  const buffers = documents.filter(document => document.collection_name === 'localFiscalBuffer');
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
   const createBuffer=buffers.length===0;
   /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. Sin
@@ -306,9 +318,13 @@ export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowChe
 export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAuthority,type?:string){
  const proof=await readAllocation(sql,local);if(!proof)return null;
  const remaining:Record<string,number>={},total:Record<string,number>={};let lastError:unknown;
- for(const member of proof.authority.allocations.filter(m=>!type||m.ncfType===type)){
+ const members = proof.authority.allocations.filter(member => !type || member.ncfType === type);
+ // The caller holds the native transaction for the entire scan. Use the same config for each member.
+ const config = members.length ? await measureSettingsReturnQa('fiscal.allocationAvailabilityConfig',
+  () => document<BusinessConfig>(sql,'config','current')) : undefined;
+ for(const member of members){
   try{
-   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);
+   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId,config);
    if(planned.restoreRetainedBlockMarker){
     await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],
      planned.config,planned.buffer,planned.selection.ncf,{requireIssuer:true});
@@ -323,10 +339,24 @@ export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAut
 }
 export async function allocationCommitPreconditions(sql:SQL,checkout:FiscalWorkflowCheckoutV2){
  const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');
- const ids=[['config','current'],['fiscalAllocations',proof.planned.allocation.id],['fiscalRanges',proof.planned.range.id],['localFiscalBuffer',proof.planned.buffer.id]];
- const snapshots=[];
- for(const [collection,id] of ids){const saved=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);snapshots.push({collection,id,expected:saved?.data||null});}
- return snapshots;
+ const ids = [
+  ['config', 'current'],
+  ['fiscalAllocations', proof.planned.allocation.id],
+  ['fiscalRanges', proof.planned.range.id],
+  ['localFiscalBuffer', proof.planned.buffer.id],
+ ];
+ // Keep the original bytes for the commit CAS, including absent rows for new buffers.
+ const snapshots = (await measureSettingsReturnQa('fiscal.allocationCommitRead', () => sql.query(`
+  WITH requested(position, collection, id) AS (VALUES (0,?,?), (1,?,?), (2,?,?), (3,?,?))
+  SELECT r.collection, r.id, d.data AS expected
+  FROM requested r
+  LEFT JOIN documents d ON d.collection_name=r.collection AND d.doc_id=r.id
+  ORDER BY r.position
+ `, ids.flat()))).values || [];
+ if (snapshots.length !== ids.length) allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+ return snapshots.map(({ collection, id, expected }) => ({
+  collection: collection as string, id: id as string, expected: (expected || null) as string | null,
+ }));
 }
 
 /** Completed authority stays readable after withdrawal; verification uses the immutable local receipt, never new eligibility. */

@@ -213,6 +213,49 @@ test('refresh racing a reserved publication invalidates the old generation witho
   assert.equal((await get()).name, 'open-2', 'no older B publication survived the competing refresh');
 });
 
+test('financial readers survive a retired catalog publication and share one cached reopen', async () => {
+  const hold = contextDeferred<void>(), entered = contextDeferred<void>();
+  const active = contextSession('ACTIVE-SQLITE');
+  let opens = 0, reopens = 0;
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => { opens++; return active; }, () => 'same-terminal', {
+    openCached: async () => { reopens++; return active; },
+    canReopen: error => (error as { code?: string }).code === 'SYNC_V3_UI_CONTEXT_CHANGED',
+  });
+  await get();
+  const publication = get.publishConfigContext(contextSession('RETIRED-CANDIDATE'), get.captureConfigContext(), async () => {
+    entered.resolve(); await hold.promise;
+  });
+  const rejectedPublication = assert.rejects(publication, /UI_CONTEXT_CHANGED/);
+  await entered.promise;
+  const first = get(), concurrent = get();
+  const rejectedRefresh = assert.rejects(get(true), /UI_CONTEXT_CHANGED/);
+  hold.resolve();
+  assert.deepEqual(await Promise.all([first, concurrent]), [active, active]);
+  await Promise.all([rejectedPublication, rejectedRefresh]);
+  assert.equal(opens, 1);
+  assert.equal(reopens, 1);
+});
+
+test('a session read never recovers across a changed terminal scope', async () => {
+  const hold = contextDeferred<void>(), entered = contextDeferred<void>();
+  let scope = 'original-terminal';
+  const active = contextSession('ACTIVE-SQLITE');
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => active, () => scope, {
+    openCached: async () => assert.fail('replacement terminal must not recover the old request'),
+    canReopen: () => true,
+  });
+  await get();
+  const publication = get.publishConfigContext(contextSession('CANDIDATE'), get.captureConfigContext(), async () => {
+    entered.resolve(); await hold.promise;
+  });
+  const rejectedPublication = assert.rejects(publication, /UI_CONTEXT_CHANGED/);
+  await entered.promise;
+  const read = assert.rejects(get(), /UI_CONTEXT_CHANGED/);
+  scope = 'other-terminal';
+  hold.resolve();
+  await Promise.all([read, rejectedPublication]);
+});
+
 for (const change of ['transport-scope', 'authority-guard']) test(`publication rechecks ${change} after asynchronous validation`, async () => {
   let scope = 'transport', valid = true, opens = 0;
   const get = createLargeMasterSyncV3SessionCoordinator(async () => contextSession(`fresh-${++opens}`), () => scope);

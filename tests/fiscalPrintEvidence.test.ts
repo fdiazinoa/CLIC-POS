@@ -83,9 +83,11 @@ test('actual TicketHistory email refreshes archived persisted proof after approv
  await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
 });
 
-async function workflowFixture(){
+async function workflowFixture(checkoutId?: string, transactionId?: string){
  const f=await fixture();delete f.tx.fiscalPrintProof;delete f.tx.fiscalSubmissionScope;
  Object.assign(f.tx,{ncf:'E310000001021',electronicNcf:'E310000001021',ncfType:'E31',customerSnapshot:{name:'Original incorrecto',taxId:'BAD'},currency:'DOP',fiscalEnvironment:0,fiscalIssuance:{issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal'}});
+ if (checkoutId) f.tx.fiscalWorkflowCheckoutId = checkoutId;
+ if (transactionId) f.tx.id = transactionId;
  const envelope={transaction:JSON.parse(JSON.stringify(f.tx))};
  const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'};
  const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
@@ -106,6 +108,176 @@ test('print readiness deadline remains bounded when transport ignores cancellati
  const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const f=await workflowFixture(),before=JSON.stringify(f.tx),old=fiscalWorkflowV2Client.cached,oldConsult=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;
  fiscalWorkflowV2Client.enabled=()=>true;fiscalWorkflowV2Client.cached=async()=>null;fiscalWorkflowV2Client.consult=()=>new Promise(()=>{});
  try{const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx,{timeoutMs:25}),undefined);assert.ok(Date.now()-start<250);assert.equal(JSON.stringify(f.tx),before);}finally{fiscalWorkflowV2Client.cached=old;fiscalWorkflowV2Client.consult=oldConsult;fiscalWorkflowV2Client.enabled=oldEnabled;}
+});
+
+test('MSeller checkout only sends signed tickets to the printer and reuses the cached timbre', async t => {
+ const { printTicket } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { tx, state } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108');
+ const stale = { ...tx };
+ delete stale.fiscalWorkflowCheckoutId;
+ const config = { currencySymbol: 'RD$', taxRate: 0, taxes: [], receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let signatureReady = false;
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  assert.equal(id, tx.id);
+  if (!signatureReady) throw new Error('FISCAL_WORKFLOW_AUTH_REQUIRED');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+
+ assert.equal(await printTicket(stale, config), false);
+ assert.deepEqual(jobs, []);
+ signatureReady = true;
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(consult.mock.callCount(), 2);
+ assert.equal(jobs.length, 2);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+ assert.equal(jobs[1], jobs[0]);
+});
+
+test('one print request survives both deadlines and coalesces another caller until the pending timbre arrives', async t => {
+ const { printTicket, printIntegratedPaymentArtifacts } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } = await import('../services/sync/LargeMasterSyncV3OperationGate');
+ const { tx, state } = await workflowFixture('21ddc090-03ec-433b-996d-b62f00fde108');
+ const config = { currencySymbol: 'RD$', receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ let started!: () => void;
+ const startedConsult = new Promise<void>(resolve => { started = resolve; });
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async () => { started(); return cached; });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), true);
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+ t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+
+ const request = printTicket(tx, config);
+ await startedConsult;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(consult.mock.callCount(), 1);
+ t.mock.timers.tick(17_000);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), false);
+ assert.deepEqual(jobs, []);
+ assert.equal(printTicket(tx, config), request);
+ const integrated = printIntegratedPaymentArtifacts(tx, config);
+ assert.equal(printIntegratedPaymentArtifacts(tx, config), integrated);
+ const releaseBaseline = reserveLargeMasterSyncV3BaselineMutation();
+ cached = { ...cached, signature: state.signature, state: 'SIGNED_PENDING' };
+ try {
+  t.mock.timers.tick(1500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(jobs, []);
+ } finally {
+  releaseBaseline();
+ }
+
+ assert.equal(await request, true);
+ assert.equal((await integrated).ticketPrinted, true);
+ assert.equal(jobs.length, 1);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+});
+
+test('print readiness survives a transient status error and returns a signed pending timbre', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { tx, state } = await workflowFixture();
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) throw new Error('FISCAL_WORKFLOW_UNAVAILABLE');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+
+ const display = await resolveFiscalPrintReadiness(tx, { timeoutMs: 6000 });
+ assert.equal(attempts, 2);
+ assert.equal(display?.securityCode, state.signature.securityCode);
+ assert.equal(display?.dgiiAccepted, false);
+});
+
+test('a private terminal hint wakes an active print and still requires an authenticated signature', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+ const { tx, state } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108', '11ddc090-03ec-433b-996d-b62f00fde109');
+ const scope = { tenantId: 'tenant-a', storeId: 'store-a', terminalId: 'terminal-a' };
+ const hint = { version: 1, transactionId: tx.id, ...scope };
+ const controller = new AbortController();
+ t.after(() => controller.abort());
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ let firstConsult!: () => void;
+ const consulting = new Promise<void>(resolve => { firstConsult = resolve; });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) { firstConsult(); return { ...state, signature: null }; }
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.timers.enable({ apis: ['setTimeout'] });
+ const print = resolveFiscalPrintReadiness(tx, { waitForSignature: true, signal: controller.signal });
+ await consulting;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, { ...scope, terminalId: 'retired-context' });
+ receiveFiscalPrintHint({ ...hint, storeId: 'another-store' }, scope, scope);
+ receiveFiscalPrintHint({ ...hint, transactionId: '00000000-0000-0000-0000-000000000001' }, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, scope);
+ receiveFiscalPrintHint(hint, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 2, 'wakes without the polling timer and ignores the duplicate hint');
+ assert.equal((await print)?.securityCode, state.signature.securityCode);
+ assert.equal((await print)?.dgiiAccepted, false);
+});
+
+test('committed MSeller sales and returns send the existing outbox before reading print status', async t => {
+ const { prepareCommittedFiscalPrint } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { durableOutboxBatchSender } = await import('../services/sync/DurableOutboxBatchSender');
+ const operations: string[] = [];
+ const { tx } = await workflowFixture('11ddc090-03ec-433b-996d-b62f00fde108');
+ t.mock.method(durableOutboxBatchSender, 'sendNext', async () => { operations.push('outbox'); });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => null);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  operations.push(id);
+  return { state: 'HELD', signature: null };
+ });
+
+ await prepareCommittedFiscalPrint({ ...tx, id: 'sale-e32', ncfType: 'E32' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'return-e34', ncfType: 'E34', documentType: 'REFUND' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'legacy', fiscalWorkflowCheckoutId: undefined });
+ assert.deepEqual(operations, ['outbox', 'sale-e32', 'outbox', 'return-e34']);
 });
 
 test('OFF print readiness and email preserve V1 proof and never consult a V2 endpoint',async()=>{const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const old=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;let network=0;fiscalWorkflowV2Client.enabled=()=>false;fiscalWorkflowV2Client.consult=async()=>{network++;throw Error('V2_FORBIDDEN');};try{const f=await fixture(),signed=await resolveFiscalPrintReadiness(f.tx);assert.ok(signed);delete f.tx.fiscalPrintProof;const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx),undefined);assert.ok(Date.now()-start<100);assert.equal((buildReceiptEmailPayload(f.tx,'fixture@example.invalid',{currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:true},companyInfo:{name:'Synthetic'},currencies:[]} as any,'RD$') as any).fiscalPrintEvidence,undefined);assert.equal(network,0);}finally{fiscalWorkflowV2Client.consult=old;fiscalWorkflowV2Client.enabled=oldEnabled;}});

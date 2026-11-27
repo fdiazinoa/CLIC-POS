@@ -48,10 +48,10 @@ export const runWithLargeMasterSyncV3CriticalOperation = async <T>(
   }
 };
 
-export const waitForLargeMasterSyncV3OperationalWindow = async (signal?: AbortSignal): Promise<number> => {
+const waitForOperationWindow = async (isHeld: () => boolean, signal?: AbortSignal): Promise<number> => {
   const startedAt = performance.now();
   const abortError = () => new DOMException('Request aborted', 'AbortError');
-  while (isPosSaleActive() || activeOperations.size || baselineMutationReserved) {
+  while (isHeld()) {
     if (signal?.aborted) throw abortError();
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
@@ -60,7 +60,7 @@ export const waitForLargeMasterSyncV3OperationalWindow = async (signal?: AbortSi
         signal?.removeEventListener('abort', abort);
       };
       const check = () => {
-        if (activeOperations.size || isPosSaleActive() || baselineMutationReserved) return;
+        if (isHeld()) return;
         cleanup();
         resolve();
       };
@@ -80,6 +80,16 @@ export const waitForLargeMasterSyncV3OperationalWindow = async (signal?: AbortSi
   if (signal?.aborted) throw abortError();
   return performance.now() - startedAt;
 };
+
+export const waitForLargeMasterSyncV3OperationalWindow = (signal?: AbortSignal): Promise<number> =>
+  waitForOperationWindow(() => isLargeMasterSyncV3OperationalWindowHeld() || baselineMutationReserved, signal);
+
+export const isLargeMasterSyncV3PaymentHeld = (): boolean => activeOperations.has('PAYMENT');
+export const waitForLargeMasterSyncV3Payment = (signal?: AbortSignal): Promise<number> =>
+  waitForOperationWindow(isLargeMasterSyncV3PaymentHeld, signal);
+
+export const waitForLargeMasterSyncV3BaselineMutation = (): Promise<number> =>
+  waitForOperationWindow(() => baselineMutationReserved);
 
 export const resetLargeMasterSyncV3OperationGateForTests = (): void => {
   activeOperations.clear();

@@ -140,13 +140,20 @@ const retryDelay = (attemptCount: number): number => {
 };
 
 export class DurableOutboxBatchSender {
+    private pending: Promise<unknown> = Promise.resolve();
     constructor(
         private readonly repository: DurableOutboxRepository = durableOutboxRepository,
         private readonly transport: BatchTransport = events => apiSyncAdapter.pushDurableOutboxBatch(events),
         private readonly readDispatchProofs:(eventIds:string[])=>Promise<DispatchAdoptionProof[]>=readDispatchAdoptionProofs,
     ) {}
 
-    async sendNext(now = new Date()): Promise<DurableBatchSendSummary> {
+    sendNext(now?: Date): Promise<DurableBatchSendSummary> {
+        const batch = this.pending.then(() => this.sendBatch(now ?? new Date()));
+        this.pending = batch.catch(() => undefined);
+        return batch;
+    }
+
+    private async sendBatch(now: Date): Promise<DurableBatchSendSummary> {
         const owner = `pos-2b:${now.getTime()}:${Math.random().toString(36).slice(2, 10)}`;
         await this.repository.recoverExpiredLeases(now);
         await this.repository.repairLegacyEventContracts?.(now);

@@ -120,8 +120,8 @@ test('validate only demands a live baseline for sales', () => {
 
 test('the reversal path never negotiates a master and reopens once after a sync', () => {
   const src = session();
-  assert.match(src, /retainedSessionCoordinator = createLargeMasterSyncV3SessionCoordinator\(\n  \(_refresh, metric\) => LargeMasterSyncV3OperationalSession\.open\(false, metric, true\)/);
-  assert.match(src, /if \(\(error as \{ code\?: string \}\)\?\.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED'\) throw error;\n  return retainedSessionCoordinator\(refresh\);/);
+  assert.match(src, /const openCachedSession = .*=>\s+LargeMasterSyncV3OperationalSession\.open\(false, metric, true\)/);
+  assert.match(src, /getLargeMasterSyncV3RetainedSession = createLargeMasterSyncV3SessionCoordinator\(\s*openCachedSession,\s*readSessionScope,\s*cachedSessionRecovery/);
   const app = source('App.tsx');
   const gate = app.slice(app.indexOf('let refundConfig = config;'), app.indexOf('// 1. Calculations'));
   assert.match(gate, /getLargeMasterSyncV3RetainedSession\(\)/);

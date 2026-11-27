@@ -98,7 +98,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  async offlineReadiness():Promise<{reason:string;code?:string;remaining?:Record<string,number>}>{
   try{const local=await readOfflineAuthority(),native=store(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));
    if(current?.allocation&&current.phase==='EFFECT_POSSIBLE'){await native?.allocationDraft?.(current);return {reason:'READY_ALLOCATION'};}
-   const allocation=await native?.allocationAvailability?.(local);if(allocation)return {reason:Object.values(allocation.remaining).some(n=>n>0)?'READY_ALLOCATION':'FISCAL_RANGE_EXHAUSTED',remaining:allocation.remaining};
+   const allocation=await measureSettingsReturnQa('fiscal.offlineReadinessAvailability', async () => native?.allocationAvailability?.(local));if(allocation)return {reason:Object.values(allocation.remaining).some(n=>n>0)?'READY_ALLOCATION':'FISCAL_RANGE_EXHAUSTED',remaining:allocation.remaining};
    if(await native?.offlineLease?.(local))return {reason:'READY_V1'};
    const leaseReason=await native?.offlineLeaseReason?.(local);if(leaseReason&&leaseReason!=='MISSING_AUTHORIZATION')return {reason:leaseReason};const preparationError=leasePreparationError||allocationPreparationError;
    return preparationError?{reason:/DISABLED/.test(preparationError)?'PREPARATION_DISABLED':'PREPARATION_FAILED',code:preparationError}:{reason:'MISSING_AUTHORIZATION'};
@@ -433,17 +433,47 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){const native=store();if(!native)fail();let markError:unknown;try{await native.markPaymentPossible(checkout.checkoutId,paymentId);}catch(error){markError=error;}const durable=await native.readCheckout(checkout.checkoutId);if(!durable||durable.phase!=='EFFECT_POSSIBLE'||!durable.paymentIds.includes(paymentId)){if(markError)throw markError;fail('PAYMENT_INTENT_RECONCILIATION_REQUIRED');}Object.assign(checkout,durable);},
  async acknowledge(checkout:FiscalWorkflowCheckoutV2){await store()?.acknowledgeCheckout(checkout.checkoutId);},
  async cached(id:string){return await store()?.readState(id)||null;},
- consult(id:string,signal?:AbortSignal,timeoutMs?:number):Promise<FiscalWorkflowStateV2>{if(!this.enabled())return Promise.reject(Error('FISCAL_WORKFLOW_DISABLED'));const current=inFlight.get(id);if(current)return current;const version=generation;const promise=(async()=>{const native=store(),source=await readSource(id);if(!native||!source)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');const before=await native.readState(id),{data,auth}=await request('status?'+new URLSearchParams({transactionId:id}),undefined,signal,timeoutMs);if(version!==generation||signal?.aborted)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');if(!contexts(data.scope,scopeOf(auth.descriptor))||!await verifyFiscalWorkflowState(source,data,await native.readReturnAttempt?.(source.id)||null))fail();if(data.sourceKind==='RETURN_SOURCE_V1'&&!await verifyReturnStatus(source,data,await native.readReturnAttempt?.(source.id)||null,before))fail();if(before&&before.observationVersion>=data.observationVersion&&!(before.mode==='PREPARED'&&data.mode==='WORKFLOW')){
- const ordinary=before.sourceKind==='ORDINARY_SOURCE_V2'&&before.operationKind==='SALE'&&before.mode==='WORKFLOW'&&['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(before.decision)&&!((source as any).articleFormatWire);
- if(ordinary){
-  const core=(state:FiscalWorkflowStateV2)=>{const {originalReference: _reference,originalReferenceReason: _reason,...rest}=state;return rest;};
-  if(before.observationVersion!==data.observationVersion||json(core(before))!==json(core(data))||data.originalReference!=null&&!validOrdinaryReturnReference(source,data))fail('FISCAL_WORKFLOW_OBSERVATION_CONFLICT');
-  auth.assertCurrent();
-  // Fresh authenticated reference metadata is transient. Native fiscal evidence remains immutable.
-  return {...before,originalReference:data.originalReference??null,originalReferenceReason:data.originalReference==null?originalReferencePendingCode(data.originalReferenceReason):null};
- }
- return before;
-}auth.assertCurrent();await native.saveState(source,data,before?.observationVersion??null);window.dispatchEvent(new CustomEvent('fiscalWorkflowUpdated',{detail:{id,state:data}}));return data as FiscalWorkflowStateV2;})().finally(()=>inFlight.delete(id));inFlight.set(id,promise);return promise;},
+ consult(id:string,signal?:AbortSignal,timeoutMs?:number):Promise<FiscalWorkflowStateV2>{
+  if(!this.enabled())return Promise.reject(Error('FISCAL_WORKFLOW_DISABLED'));
+  const current=inFlight.get(id);if(current)return current;
+  const version=generation;
+  const promise=(async()=>{
+   const native=store(),source=await readSource(id);
+   if(!native||!source)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');
+   const ordinaryReturn=source.ncfType==='E34'&&!(source as any).articleFormatWire;
+   const readStatus=()=>request('status?'+new URLSearchParams({transactionId:id}),undefined,signal,timeoutMs);
+   // The authenticated GET and local version read are independent. Both are needed before verifying the observation.
+   const [before,{data,auth}]=ordinaryReturn
+    ? await Promise.all([native.readState(id),measureSettingsReturnQa('fiscal.returnPrintStatus',readStatus)])
+    : [await native.readState(id),await readStatus()];
+   if(version!==generation||signal?.aborted)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+   if(!contexts(data.scope,scopeOf(auth.descriptor)))fail();
+   if(ordinaryReturn||data.sourceKind==='RETURN_SOURCE_V1'){
+    const valid=await measureSettingsReturnQa('fiscal.returnPrintVerify',async()=>{
+     const attempt=await native.readReturnAttempt?.(source.id)||null;
+     return verifyReturnStatus(source,data,attempt,before);
+    });
+    if(!valid)fail();
+   }else if(!await verifyFiscalWorkflowState(source,data))fail();
+   if(before&&before.observationVersion>=data.observationVersion&&!(before.mode==='PREPARED'&&data.mode==='WORKFLOW')){
+    const ordinary=before.sourceKind==='ORDINARY_SOURCE_V2'&&before.operationKind==='SALE'&&before.mode==='WORKFLOW'&&['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(before.decision)&&!((source as any).articleFormatWire);
+    if(ordinary){
+     const core=(state:FiscalWorkflowStateV2)=>{const {originalReference: _reference,originalReferenceReason: _reason,...rest}=state;return rest;};
+     if(before.observationVersion!==data.observationVersion||json(core(before))!==json(core(data))||data.originalReference!=null&&!validOrdinaryReturnReference(source,data))fail('FISCAL_WORKFLOW_OBSERVATION_CONFLICT');
+     auth.assertCurrent();
+     // Fresh authenticated reference metadata is transient. Native fiscal evidence remains immutable.
+     return {...before,originalReference:data.originalReference??null,originalReferenceReason:data.originalReference==null?originalReferencePendingCode(data.originalReferenceReason):null};
+    }
+    return before;
+   }
+   auth.assertCurrent();
+   await native.saveState(source,data,before?.observationVersion??null);
+   window.dispatchEvent(new CustomEvent('fiscalWorkflowUpdated',{detail:{id,state:data}}));
+   return data as FiscalWorkflowStateV2;
+  })().finally(()=>inFlight.delete(id));
+  inFlight.set(id,promise);
+  return promise;
+ },
  async correct(id:string,input:{expectedRevision:number;reason:string;buyer:Record<string,string>;actorId:string;pin:string;operationId?:string}){if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const source=await readSource(id),native=store();if(!source||!native)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');const before=await native.readState(id),{data,auth}=await request('buyer-draft',{transactionId:id,...input,operationId:input.operationId||createUuid()});if(!contexts(data.scope,scopeOf(auth.descriptor))||!await verifyFiscalWorkflowState(source,data))fail();auth.assertCurrent();await native.saveState(source,data,before?.observationVersion??null);window.dispatchEvent(new CustomEvent('fiscalWorkflowUpdated',{detail:{id,state:data}}));return data as FiscalWorkflowStateV2;},
  async runRound(){if(!this.enabled())return;const native=store();if(!native)return;const auth=readAuth(),ids=await native.candidates(json(scopeOf(auth.descriptor)),cursor,10);if(!ids.length){cursor='';return;}for(const id of ids){auth.assertCurrent();try{await this.consult(id);}catch{/* Conserves retained source and last verified evidence. */}cursor=id;}},
  };

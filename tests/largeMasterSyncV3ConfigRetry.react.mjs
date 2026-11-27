@@ -11,12 +11,12 @@ const original={window:globalThis.window,act:globalThis.IS_REACT_ACT_ENVIRONMENT
 globalThis.window=new EventTarget();globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const env={React};globalThis.__v3ConfigRetry=env;
 const defer=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
-const config=()=>({terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'erp',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'},pricing:{defaultTariffId:'T',allowedTariffIds:['T','OTHER']}}}],tariffs:[{id:'T',taxIncluded:false},{id:'OTHER',taxIncluded:false}],taxes:[],taxRate:0});
+const config=()=>({terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'erp',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'},pricing:{defaultTariffId:'T',allowedTariffIds:['T','OTHER']},fiscal:{environment:0,fiscalAllocations:[{id:'allocated',nextNumber:10,reservedEnd:20}]}}}],tariffs:[{id:'T',taxIncluded:false},{id:'OTHER',taxIncluded:false}],taxes:[],taxRate:0});
 const cart=()=>[{id:'retained',cartId:'same-line',quantity:2,price:45,v3SaleAuthority:{syncId:'old-cart-generation',syncVersion:4,binding:'same-owner'}}];
 const mocks={
  react:'module.exports=globalThis.__v3ConfigRetry.React;module.exports.default=module.exports;',
  './POSInterface':`const E=globalThis.__v3ConfigRetry,R=E.React;module.exports=function POS(props){const [retained]=R.useState({ticket:'same-ticket',reservation:'same-reservation',payment:'same-local-state'});R.useEffect(()=>{E.mounts++;return()=>E.unmounts++;},[]);E.child={props,retained};return R.createElement('section',{'data-pos':true});};`,
- '../services/sync/LargeMasterSyncV3OperationalSession':'exports.acquireLargeMasterSyncV3ConfigContext=(config)=>globalThis.__v3ConfigRetry.acquire(config);',
+ '../services/sync/LargeMasterSyncV3OperationalSession':`exports.acquireLargeMasterSyncV3ConfigContext=(config)=>globalThis.__v3ConfigRetry.acquire(config);exports.getLargeMasterSyncV3OperationalSession=async()=>globalThis.__v3ConfigRetry.nativeSession;exports.isRecoverableV3SessionRead=error=>error?.code==='SYNC_V3_RUNTIME_VERSION_CHANGED';`,
  '../services/sync/LargeMasterSyncV3CatalogUpdates':'exports.subscribeLargeMasterSyncV3CatalogUpdates=callback=>{globalThis.__v3ConfigRetry.catalogUpdated=callback;return()=>{globalThis.__v3ConfigRetry.catalogUpdated=undefined;};};',
  '../services/sync/LargeMasterSyncV3FinancialCommit':'exports.readV3CompletedReservation=()=>{throw Error("unused-financial-boundary")};',
  '../services/sync/LargeMasterSyncV3ReservationRecovery':'exports.restoreV3ReservationReference=exports.expireV3Reservation=()=>{throw Error("unused-financial-boundary")};',
@@ -24,13 +24,14 @@ const mocks={
 };
 const built=await build({stdin:{contents:`
  export { default } from './components/LargeMasterSyncV3OperationalPOS';
+ export { setLargeMasterSyncV3CriticalOperation } from './services/sync/LargeMasterSyncV3OperationGate';
  export { v3ErpStockDisplay, v3ErpStockDisplayScope } from './services/sync/LargeMasterSyncV3ErpStockDisplay';
 `,resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',jsx:'transform',tsconfigRaw:{compilerOptions:{jsx:'react'}},plugins:[{name:'config-retry-react-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path]}));}}]});
 const loaded={exports:{}};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);
-const { default:Component, v3ErpStockDisplay, v3ErpStockDisplayScope }=loaded.exports;
+const { default:Component, setLargeMasterSyncV3CriticalOperation, v3ErpStockDisplay, v3ErpStockDisplayScope }=loaded.exports;
 const settle=()=>act(async()=>{for(let n=0;n<30;n++)await Promise.resolve();});
 async function fixture({initialHold,emptyCart=false}={}){
- Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,bindingVersion:1,runtimeVersion:1,resumeGuard:undefined,projects:[],categoryReads:[]});
+ Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,bindingVersion:1,runtimeVersion:1,resumeGuard:undefined,projects:[],categoryReads:[],staleNativeSession:undefined});
  let rendered=config();const lines=emptyCart?[]:cart(),before=JSON.stringify(lines);let renderer;
  env.acquire=async input=>{
   const binding = env.bindingVersion;
@@ -39,19 +40,20 @@ async function fixture({initialHold,emptyCart=false}={}){
   if(outcome.acquire)await outcome.acquire;
   if(outcome.fail||!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
   const source={categories:async()=>{env.categoryReads.push(index);if(outcome.categories)await outcome.categories;return [{key:`C${index}`,label:`category-${index}`,count:1}];},search:async query=>query ? [{product:{id:'filtered',name:query}}] : [],get:async()=>null,findBarcode:async()=>({item:{product:{id:`P${index}`,name:`product-${index}`,price:index}}})};
-  return {binding:`binding-${binding}`,ready:{runtime:{version:{syncId:'master',syncVersion:runtime}}},
+  return env.nativeSession={binding:`binding-${binding}`,ready:{runtime:{version:{syncId:'master',syncVersion:runtime}}},
    needsSessionRenewal:()=>env.validIdentity && binding!==env.bindingVersion,
    assertSetupIdentity:()=>{if(binding!==env.bindingVersion)throw Error('SYNC_V3_BINDING_CHANGED');},assertCurrent:async()=>{
    if(env.resumeGuard)await env.resumeGuard;
    if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
    if(runtime!==env.runtimeVersion)throw Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
-  },projectConfig:async value=>{env.projects.push(index);return value;},catalog:async()=>source,withStocks:async rows=>rows,withStock:async row=>row,validate:async()=>{if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');}};
+  },projectConfig:async value=>{env.projects.push(index);return value;},catalog:async()=>source,withStocks:async rows=>rows,withStock:async row=>row,validate:async()=>{if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');if(env.staleNativeSession===index)throw Object.assign(Error('SYNC_V3_RUNTIME_VERSION_CHANGED'),{code:'SYNC_V3_RUNTIME_VERSION_CHANGED'});}};
  };
  const props=()=>({config:rendered,activeTerminalId:'local',cart:lines,onOpenSettings(){},onUpdateCart(){throw Error('cart-mutation-forbidden');}});
  await act(async()=>{renderer=Renderer.create(React.createElement(Component,props()));});await settle();
- return {renderer,lines,before,props,update:async({newRef=false,name,erpBinding,settingsSuspended}={})=>{
+ return {renderer,lines,before,props,update:async({newRef=false,name,erpBinding,allocation,settingsSuspended}={})=>{
   if(newRef)rendered={...rendered,...(name?{name}:{})};
   if(erpBinding){rendered=structuredClone(rendered);Object.assign(rendered.terminals[0].config.erpBinding,erpBinding);}
+  if(allocation){rendered=structuredClone(rendered);Object.assign(rendered.terminals[0].config.fiscal.fiscalAllocations[0],allocation);}
   await act(async()=>renderer.update(React.createElement(Component,{...props(),settingsSuspended})));await settle();
  },event:async()=>{await act(async()=>env.catalogUpdated());await settle();},text:()=>JSON.stringify(renderer.toJSON()),unchanged:retained=>{assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.strictEqual(env.child.retained,retained);assert.strictEqual(env.child.props.cart,lines);assert.equal(JSON.stringify(lines),before);},close:async()=>{await act(async()=>renderer.unmount());}};
 }
@@ -72,6 +74,54 @@ try{
   await act(async()=>renew());await settle();assert.equal(env.requests.length,2);
   f.unchanged(retained);
   results.push('session renewal reopens the POS authority without changing the ticket');
+ }finally{await f.close();}}
+ {const f=await fixture();try{
+  const retained=env.child.retained, boundary=env.child.props.v3Operational;
+  setLargeMasterSyncV3CriticalOperation('PAYMENT',true);
+  try {
+   env.bindingVersion++;
+   await act(async()=>{window.dispatchEvent(new Event('terminalSessionRenewed'));});await settle();
+   assert.equal(env.requests.length,1);
+   assert.strictEqual(env.child.props.v3Operational,boundary);
+   await boundary.validate(f.lines);
+  } finally {await act(async()=>setLargeMasterSyncV3CriticalOperation('PAYMENT',false));}
+  await settle();
+  assert.equal(env.requests.length,2);
+  await assert.rejects(boundary.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  f.unchanged(retained);
+  results.push('credential renewal waits for the payment boundary and retains the ticket');
+ }finally{await f.close();}}
+ {const f=await fixture();try{
+  const retained=env.child.retained, original=env.child.props.v3Operational, replacement=defer();
+  env.outcomes.push({acquire:replacement.promise});
+  await f.event();
+  const repainting=env.child.props.v3Operational;
+  await assert.rejects(original.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  await assert.rejects(repainting.validate(f.lines),/UI_CONTEXT_CHANGED/);
+  await original.validateCheckout(f.lines);
+  await repainting.validateCheckout(f.lines);
+  env.validIdentity=false;
+  await assert.rejects(original.validateCheckout(f.lines),/BINDING_CHANGED/);
+  env.validIdentity=true;
+  await act(async()=>replacement.resolve());await settle();
+  env.staleNativeSession=1;
+  await original.validateCheckout(f.lines);
+  assert.equal(env.projects.at(-1),2,'checkout uses the validated replacement session');
+  f.unchanged(retained);
+  await f.update({erpBinding:{storeId:'other-store'}});
+  await assert.rejects(original.validateCheckout(f.lines),/UI_CONTEXT_CHANGED/);
+  results.push('checkout survives visual catalog replacement and still rejects native or store authority changes');
+ }finally{await f.close();}}
+ {const f=await fixture();try{
+  const receipt=env.child.retained, original=env.child.props.v3Operational;
+  await f.update({allocation:{nextNumber:11}});
+  assert.equal(env.requests.length,1,'advancing a fiscal cursor keeps the current catalog session');
+  await original.validate(f.lines);
+  await original.validateCheckout(f.lines);
+  f.unchanged(receipt);
+  await f.update({allocation:{reservedEnd:19}});
+  await assert.rejects(original.validateCheckout(f.lines),/UI_CONTEXT_CHANGED/);
+  results.push('checkout keeps its authority through fiscal counter advancement and rejects changes to the authorized range');
  }finally{await f.close();}}
  // New props before rejection: replacement succeeds; the retired catch cannot overwrite it.
  {const f=await fixture();try{

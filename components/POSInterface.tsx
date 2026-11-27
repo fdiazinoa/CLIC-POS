@@ -273,6 +273,7 @@ export interface V3OperationalPOSBoundary {
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
    validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   validateCheckout?: V3OperationalPOSBoundary['validate'];
    completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
    restoreReservation?(id: string): Promise<V3RecoveredReservation>;
@@ -6131,7 +6132,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if(!dispatchCheckoutRef.current)assertFormatsPostingClosed(processedCart);
          if(!retainedLegacyTxn)await assertCheckoutFiscalAuthority();
          if (!retainedLegacyTxn&&v3Operational&&!dispatchCheckoutRef.current) {
-            try { await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+            try { await (v3Operational.validateCheckout ?? v3Operational.validate)(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
             catch (error: any) {
                // Name the warehouse where the ticket's articles actually live: "no disponible" alone
                // leaves the cashier without a decision.
@@ -7209,7 +7210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const assertNewCheckoutFiscalAuthority = async (assertAdmissionCurrent?:()=>void) => {
       if(processedCart.some(line=>line.inventoryPresentation!==undefined)){
          if(!v3Operational||isOrderTakerMode)throw Error('INVENTORY_PRESENTATION_CHECKOUT_REQUIRED');
-         await v3Operational.validate(processedCart);assertAdmissionCurrent?.();
+         await (v3Operational.validateCheckout ?? v3Operational.validate)(processedCart);assertAdmissionCurrent?.();
       }
       if (isOrderTakerMode) return;
       if (isFiscalModeDisabled) {
@@ -7480,7 +7481,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         dispatchCheckoutRef.current={checkoutId,transactionId,source,effectPossible:previous?.checkoutId===checkoutId&&previous.effectPossible||checkout?.phase==='EFFECT_POSSIBLE',...(previous?.recoveryPayments?{recoveryPayments:previous.recoveryPayments}:{})};
       }
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { if(processedCart.some(line=>line.articleFormat)&&!dispatchPreparation){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else if(!dispatchPreparation)await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+      try { if(processedCart.some(line=>line.articleFormat)&&!dispatchPreparation){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else if(!dispatchPreparation)await (v3Operational.validateCheckout ?? v3Operational.validate)(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       if(offlineFiscalCheckout&&activeTable&&JSON.stringify(await readTableFiscalSaleContext(String(activeTable.currentOrderId),String(activeTable.id)).catch(error=>{offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw error;}))!==JSON.stringify(offlineTableFiscalContextRef.current)){offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw Error('OFFLINE_FISCAL_TABLE_SOURCE_CHANGED');}
       const trackingSelections=dispatchPreparation?[]:processedCart.flatMap(line=>line.trackingData||[]);

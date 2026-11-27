@@ -206,6 +206,28 @@ test('two original status timeouts leave the attempt unprepared', async (t) => {
     assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
 });
 
+test('one return authorization recovers a dropped original GET and a temporarily missing reference', async t => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    let reads = 0;
+    f.setConsult(async id => {
+        assert.equal(id, f.original.id);
+        assert.equal(f.prepareCalls.length, 0);
+        assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
+        reads++;
+        if (reads === 1) throw new TypeError('Failed to fetch');
+        if (reads === 2) return { ...f.parent, originalReference: null, originalReferenceReason: 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE' };
+        return f.parent;
+    });
+    const result = await f.run();
+    assert.equal(result.ncfType, 'E34');
+    assert.equal(reads, 3);
+    assert.equal(f.prepareCalls.length, 1);
+    assert.equal(JSON.parse(f.prepareCalls[0]).originalReference.ncf, f.original.ncf);
+    const count = f.db.prepare("SELECT count(*) n FROM sync_outbox_v2 WHERE event_type='SALES_CREDIT_NOTE_POSTED'").get() as { n: number };
+    assert.equal(count.n, 1);
+});
+
 test('an unaccepted original cannot reserve an E34 number', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
@@ -446,18 +468,78 @@ for (const consumerFinalE32 of [false, true]) test(`native status and print proo
     const signed = { ...workflow, state: 'SIGNED_PENDING', observationVersion: 1, signature: { schemaVersion: 1, qrUrl: url.href, securityCode: 'ABCDEF', signedAt } };
     assert.equal(await verifyReturnStatus(tx, signed, a, workflow), true);
     assert.match(returnStatusMessage(signed), /pendiente de aceptación/);
-    await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+    const { dbAdapter } = await import('../services/db');
+    const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+    t.mock.method(fiscalWorkflowV2Client, 'cached', (id: string) => f.adapter.fiscalWorkflowStore.readState(id));
+    Object.defineProperty(dbAdapter, 'fiscalReturnStore', { value: f.adapter.fiscalReturnStore, configurable: true });
+    t.after(() => { Reflect.deleteProperty(dbAdapter, 'fiscalReturnStore'); });
+    if (consumerFinalE32) {
+        const { printTicket } = await import('../utils/printer');
+        const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+        const config = { currencySymbol: 'RD$', companyInfo: { name: 'Synthetic' }, receiptConfig: { showQr: true }, currencies: [], taxes: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: 0.18 }] } as any;
+        let begin!: () => void;
+        const started = new Promise<void>(resolve => { begin = resolve; });
+        let signatureAvailable = false;
+        const jobs: string[] = [];
+        t.mock.method(dbAdapter, 'getDocument', async () => tx);
+        t.mock.method(dbAdapter, 'getCollection', async () => []);
+        t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+        t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+            assert.equal(id, tx.id);
+            begin();
+            if (!signatureAvailable) return workflow;
+            await f.adapter.fiscalWorkflowStore.saveState(tx, signed, 0);
+            return signed;
+        });
+        t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+            jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+            return true;
+        });
+        t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+        const print = printTicket(tx, config);
+        await started;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(jobs, []);
+        signatureAvailable = true;
+        t.mock.timers.tick(17_000);
+        assert.equal(await print, true);
+        t.mock.timers.reset();
+        assert.equal(jobs.length, 1);
+        assert.match(jobs[0], /ABCDEF/);
+        assert.match(jobs[0], /Pendiente de confirmacion/);
+    } else {
+        const { createFiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+        const store = f.adapter.fiscalWorkflowStore;
+        const originalReadState = store.readState.bind(store);
+        let resumeState!: () => void;
+        const stateGate = new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(Error('Status GET did not start during the SQLite read')), 1000);
+            resumeState = () => { clearTimeout(timer); resolve(); };
+        });
+        t.mock.method(store, 'readState', async (id: string) => { await stateGate; return originalReadState(id); });
+        const readAttempt = t.mock.method(store, 'readReturnAttempt', async () => a);
+        const client = createFiscalWorkflowV2Client({
+            store: () => store,
+            readSource: async () => tx,
+            readAuth: () => ({ base: 'https://return-fixture.invalid/api/sync', headers: {}, descriptor: a.scope, assertCurrent() {} }),
+            fetchImpl: async (url: string, options: RequestInit) => {
+                assert.equal(new URL(url).pathname, '/api/sync/fiscal/workflow/v2/status');
+                assert.equal(options.method, 'GET');
+                resumeState();
+                return Response.json(signed);
+            },
+        } as any);
+        t.mock.method(client, 'enabled', () => true);
+        assert.equal((await client.consult(tx.id, undefined, 500)).state, 'SIGNED_PENDING');
+        assert.equal(readAttempt.mock.callCount(), 1);
+        assert.equal((await originalReadState(tx.id))?.observationVersion, 1);
+    }
     const accepted = { ...signed, state: 'ACCEPTED', decision: 'ACCEPTED', observationVersion: 2 };
     assert.equal(await verifyReturnStatus(tx, accepted, a, signed), true);
     await f.adapter.fiscalWorkflowStore.saveState(tx, accepted, 1);
     assert.equal(await verifyReturnStatus(tx, { ...accepted, buyer: { taxId: '999999999' } }, a), false);
     assert.equal(await verifyReturnStatus(tx, signed, a, accepted), false);
     assert.match(returnStatusMessage(accepted), /aceptada por DGII/);
-    const { dbAdapter } = await import('../services/db');
-    const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-    t.mock.method(fiscalWorkflowV2Client, 'cached', (id: string) => f.adapter.fiscalWorkflowStore.readState(id));
-    Object.defineProperty(dbAdapter, 'fiscalReturnStore', { value: f.adapter.fiscalReturnStore, configurable: true });
-    t.after(() => { Reflect.deleteProperty(dbAdapter, 'fiscalReturnStore'); });
     const display = await resolveFiscalPrintDisplay(tx);
     assert.equal(display?.qrUrl, url.href);
     assert.equal(display?.dgiiAccepted, true);
