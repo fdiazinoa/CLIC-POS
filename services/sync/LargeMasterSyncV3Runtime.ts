@@ -3,6 +3,7 @@ import type {
   LargeMasterSyncV3RuntimeVersion,
   LargeMasterSyncV3Store,
   V3CatalogPageRequest,
+  V3CatalogSaleReadStage,
 } from './LargeMasterSyncV3Types';
 
 /**
@@ -47,6 +48,10 @@ export class LargeMasterSyncV3Runtime {
     return this.store.getOperationalCategories(this.version, tariffId);
   }
 
+  readOperationalCatalogSale(articleId: string, tariffId: string, observe?: (stage: V3CatalogSaleReadStage) => void) {
+    return this.store.readOperationalCatalogSale?.(this.version, articleId, tariffId, observe);
+  }
+
   getOperationalArticle(articleId: string): Promise<Record<string, unknown> | null> {
     return this.store.getOperationalArticle(this.version, articleId);
   }
@@ -84,7 +89,7 @@ export class LargeMasterSyncV3Runtime {
     return this.store.getInventorySnapshotVersion(this.version);
   }
 
-  getOperationalSupports(itemIds: string[], warehouseId: string) {
-    return this.store.getOperationalSupports?.(this.version, itemIds, warehouseId);
+  getOperationalSupports(itemIds: string[], warehouseId: string, checkInventory = false) {
+    return this.store.getOperationalSupports?.(this.version, itemIds, warehouseId, checkInventory);
   }
 }

@@ -11,6 +11,15 @@ export interface TableFiscalSaleContext {schemaVersion:1;kind:'TABLE_ACCOUNT';ac
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);
 const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 export const offlineFiscalFail=(code='OFFLINE_FISCAL_LEASE_INVALID'):never=>{throw Error(code);};
+/** Stable fiscal fields that a downloaded grant carries about itself: scope, issuer, provider, environment.
+ * The binding hash is not identity on its own: older builds mixed the rotating device token and the
+ * mutable sync base into it, so a stored hash can only be accepted after these fields match. */
+export interface OfflineFiscalRecordIdentity {scope?:FiscalWorkflowScope;issuerRnc?:string;environment?:number;provider?:string}
+export function offlineFiscalRecordIdentityMatches(authority:OfflineFiscalLocalAuthority,record:OfflineFiscalRecordIdentity|null|undefined):boolean {
+ if(!record||!record.scope||typeof record.scope!=='object'||record.provider!=='MSELLER')return false;
+ if(record.issuerRnc!==authority.issuerRnc||record.environment!==authority.environment)return false;
+ try{return fiscalWorkflowScopeKey(record.scope)===fiscalWorkflowScopeKey(authority.scope);}catch{return false;}
+}
 export function validateOfflineFiscalLease(value:OfflineFiscalLease,authority:OfflineFiscalLocalAuthority):void {
  if(!value||!value.scope||typeof value.scope!=='object'||Object.values(value.scope).some(v=>typeof v!=='string'||!v)||value.contractVersion!==1||value.authorizationKind!=='OFFLINE_FISCAL_LEASE_V1'||!uuid(value.leaseId)
   ||fiscalWorkflowScopeKey(value.scope)!==fiscalWorkflowScopeKey(authority.scope)||value.issuerRnc!==authority.issuerRnc

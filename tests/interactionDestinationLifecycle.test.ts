@@ -139,7 +139,13 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
       const opened: boolean[] = [];
       const modalTrace = { current: null };
       const bindings = {
-        ...api, window: browser, console: { error() {} }, isOrderTakerMode: false,
+        ...api, window: browser, console: { error(error: unknown) { throw error; } }, isOrderTakerMode: false,
+        checkoutAdmissionRef: { current: null }, checkoutProgressRef: { current: null }, fiscalCheckoutRef: { current: null },
+        readCheckoutAdmissionIdentity: () => 'unchanged', yieldInteractionPaint: async () => {},
+        canProceedWithOperationalSession: async () => true, completedReservationForReceipt: async () => null,
+        completeCommittedFiscalReceipt: async () => null, assertNewCheckoutFiscalAuthority: async () => {},
+        validateTerminalDocument: () => ({ isValid: true }), config: {}, terminalId: "test",
+        v3Operational: null, hasV3ReservationCart: false,
         handleSendAndExit: async () => undefined, setErrorToast() {}, cart: [{ quantity: 1 }],
         isValidCartQuantity: (value: number) => value > 0, alert() {}, refundAuthorizedBy: null,
         ensureSalesWithOpenZPermission: () => true, activePaymentFraction: null, isCurrentPaymentFraction: true,
@@ -166,18 +172,16 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
       assert.equal(flow.opened.length, 0); assert.equal(attempt.status, 'cancelled');
       api.markRenderEnd('POS_INTERACTION_VIEW'); assert.equal(frames.length, 0);
     }
-    const flow = makeCheckout();
-    const attempt = api.beginDestinationInteraction('CHECKOUT_OPEN', clock);
     let resolveWarning!: (allowed: boolean) => void;
+    const flow = makeCheckout({ canProceedWithOperationalSession: () => new Promise<boolean>(resolve => { resolveWarning = resolve; }) });
+    const attempt = api.beginDestinationInteraction('CHECKOUT_OPEN', clock);
     const request = caller('requestCheckout', {
-      ...api, startCheckoutInteraction: () => attempt, isOrderTakerMode: false,
-      validateTerminalDocument: () => ({ isValid: true }), config: {}, terminalId: 'test', alert() {},
-      canProceedWithOperationalSession: () => new Promise<boolean>(resolve => { resolveWarning = resolve; }),
-      proceedToCheckout: flow.proceed,
+      startCheckoutInteraction: () => attempt, proceedToCheckout: flow.proceed,
     });
     const pending = request(clock, true);
     api.markRenderEnd('POS_INTERACTION_VIEW'); assert.equal(frames.length, 0);
     assert.equal(attempt.status, 'pending');
+    await Promise.resolve();
     resolveWarning(true); await pending;
     assert.deepEqual(flow.opened, [true]); assert.equal(flow.modalTrace.current, attempt);
     assert.equal(attempt.status, 'pending');
@@ -185,19 +189,26 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
     assert.equal(attempt.status, 'completed');
     for (const denial of ['session', 'fiscal'] as const) {
       const denied = api.beginDestinationInteraction('CHECKOUT_OPEN', clock);
-      const denyRequest = caller('requestCheckout', {
-        ...api, startCheckoutInteraction: () => denied, isOrderTakerMode: false,
-        validateTerminalDocument: () => ({ isValid: denial !== 'fiscal' }), config: {}, terminalId: 'test', alert() {},
+      const deniedFlow = makeCheckout({
+        validateTerminalDocument: () => ({ isValid: denial !== 'fiscal' }),
         canProceedWithOperationalSession: async () => denial !== 'session',
-        proceedToCheckout: () => assert.fail('denied entry reached checkout'),
       });
-      await denyRequest(clock, true);
+      await deniedFlow.proceed(denied, true);
+      assert.deepEqual(deniedFlow.opened, []);
       assert.equal(denied.status, 'cancelled');
     }
 
     const failed = api.beginDestinationInteraction('CHECKOUT_OPEN', clock);
-    await assert.rejects(makeCheckout({ requestApproval: async () => { throw new Error('approval unavailable'); }, canCheckout: false }).proceed(failed));
-    assert.equal(failed.status, 'failed');
+    const errors: string[] = [];
+    const failedFlow = makeCheckout({
+      requestApproval: async () => { throw new Error('approval unavailable'); },
+      canCheckout: false,
+      setErrorToast: (message: string) => errors.push(message),
+    });
+    await failedFlow.proceed(failed);
+    assert.deepEqual(errors, ['approval unavailable']);
+    assert.deepEqual(failedFlow.opened, []);
+    assert.equal(failed.status, 'cancelled');
     const first = api.beginDestinationInteraction('OPEN_TABLE', clock);
     api.expectInteractionDestination(first, 'POS_TABLE'); api.commitInteractionDestination(first, 'POS_TABLE');
     for (let i = 0; i < 350; i++) api.beginDestinationInteraction('OPEN_TABLE', clock);
@@ -209,4 +220,31 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
       if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete (globalThis as any)[name];
     }
   }
+});
+
+test('adding an item acknowledges only the cart commit with the expected line and quantity', () => {
+  const text = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const pending = text.indexOf('const pendingAddCommit =');
+  const start = text.indexOf('useLayoutEffect(() => {', pending);
+  const end = text.indexOf('}, [cart]);', start);
+  assert.ok(pending >= 0 && start > pending && end > start);
+  const run = new Function('useLayoutEffect', 'cart', 'pendingAddCommit', 'markInteractionStage', 'commitInteractionDestination', 'uiLifetime',
+    text.slice(start, end + '}, [cart]);'.length));
+  const trace = { id: 'test-add' };
+  const pendingAdd = { current: { trace, line: { cartId: 'line-1', quantity: 2 } } };
+  const events: string[] = [];
+  const capture = () => true;
+  const render = (cart: Array<{ cartId: string; quantity: number }>) =>
+    run((effect: () => void) => effect(), cart, pendingAdd,
+      (t: unknown, stage: string) => { assert.equal(t, trace); events.push(stage); },
+      (t: unknown, target: string, _: unknown, current: () => boolean) => { assert.equal(t, trace); assert.equal(current, capture); events.push(target); },
+      { current: { capture: () => capture } });
+  render([{ cartId: 'line-2', quantity: 2 }]);
+  render([{ cartId: 'line-1', quantity: 1 }]);
+  assert.deepEqual(events, []);
+  render([{ cartId: 'line-1', quantity: 2 }]);
+  assert.deepEqual(events, ['ADD_CART_COMMIT', 'POS_ADD_ITEM']);
+  assert.equal(pendingAdd.current, null);
+  render([{ cartId: 'line-1', quantity: 2 }]);
+  assert.equal(events.length, 2);
 });

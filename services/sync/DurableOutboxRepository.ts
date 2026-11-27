@@ -7,6 +7,7 @@ import type {
 import { v4 as uuidv4, validate as isUuid } from 'uuid';
 import { dbAdapter } from '../db';
 import { syncMetrics } from './SyncMetrics';
+import { signalDurableOutboxCommitted } from './DurableOutboxCommitSignal';
 import {
     assertSalePostedPayload,
     buildSalePostedPayload,
@@ -71,6 +72,7 @@ export class DurableOutboxRepository {
         if (!this.database.commitFinancialTransaction) {
             throw new Error('El adaptador activo no soporta commit financiero SQLite atómico.');
         }
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_VALIDATE_START');
         const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
         for (const event of outboxEvents.filter(candidate => candidate.eventType.trim().toUpperCase() === 'SALE_POSTED')) {
             try {
@@ -93,6 +95,8 @@ export class DurableOutboxRepository {
         await this.database.commitFinancialTransaction(input);
         recordCheckoutDiagnostic('FINANCIAL_COMMIT_OK', diagnostic);
         await this.refreshMetrics();
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_METRICS_DONE');
+        signalDurableOutboxCommitted(input);
     }
 
     async recoverExpiredLeases(now = new Date()): Promise<number> {
@@ -348,22 +352,51 @@ export class DurableOutboxRepository {
         return rowsFromResult(result).length>0;
     }
 
+    /** Any durable event currently eligible for the outbox transport (sale/payment/tracking/return/…). */
+    async hasPendingEvents():Promise<boolean>{
+        if(!this.isSupported())return false;
+        const result=await this.requireSql()("SELECT 1 present FROM sync_outbox_v2 WHERE status IN('PENDING','RETRY_WAIT') LIMIT 1");
+        return rowsFromResult(result).length>0;
+    }
+
     async hasPendingTrackingEvents():Promise<boolean>{
         if(!this.isSupported())return false;
         const result=await this.requireSql()("SELECT 1 present FROM sync_outbox_v2 WHERE json_extract(payload_json,'$.pos_tracking_contract_version')='1' AND status IN('PENDING','SENDING','RETRY_WAIT') LIMIT 1");
         return rowsFromResult(result).length>0;
     }
 
-    async refreshMetrics(): Promise<void> {
-        if (!this.database.executeSQL) return;
-        const result = await this.database.executeSQL(
+    /** Offline fiscal sales still waiting for ERP ACK. Reauthorizing before draining them revokes the
+     * lease that backs them on the ERP, so boot/manual reauth must prioritize this queue. */
+    async pendingOfflineFiscalSales(): Promise<{ pending: number; oldestCreatedAt: string | null }> {
+        if (!this.database.executeSQL) return { pending: 0, oldestCreatedAt: null };
+        const sql = this.requireSql();
+        const result = await sql(
             `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at
+             FROM sync_outbox_v2
+             WHERE status IN ('PENDING','SENDING','RETRY_WAIT')
+               AND event_type IN ('SALE_POSTED','PAYMENT_POSTED')
+               AND payload_json LIKE '%fiscalWorkflowBirth%'`
+        );
+        const row = rowsFromResult(result)[0];
+        return {
+            pending: Number(row?.pending_count || 0),
+            oldestCreatedAt: row?.oldest_created_at ? String(row.oldest_created_at) : null,
+        };
+    }
+
+    async refreshMetrics(): Promise<number | null> {
+        if (!this.database.executeSQL) return null;
+        const result = await this.database.executeSQL(
+            `SELECT COUNT(*) AS pending_count, MIN(created_at) AS oldest_created_at,
+                    MIN(CASE WHEN status = 'RETRY_WAIT' THEN next_retry_at END) AS next_retry_at
              FROM sync_outbox_v2
              WHERE status IN ('PENDING','SENDING','RETRY_WAIT')`
         );
         const row = rowsFromResult(result)[0];
         const oldest = row?.oldest_created_at ? Date.parse(String(row.oldest_created_at)) : null;
         syncMetrics.setOutboxState(Number(row?.pending_count || 0), Number.isFinite(oldest) ? oldest : null);
+        const nextRetryAt = Date.parse(String(row?.next_retry_at || ''));
+        return Number.isFinite(nextRetryAt) ? nextRetryAt : null;
     }
 
     private requireSql(): (query: string, params?: any[]) => Promise<any> {

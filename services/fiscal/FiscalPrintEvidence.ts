@@ -1,5 +1,6 @@
-import type {Transaction} from '../../types';
-import {verifyFiscalStatusProof,type FiscalStatusProof,sameFiscalNcf} from './FiscalStatusProof';
+import type {BusinessConfig,Transaction} from '../../types';
+import {verifyFiscalStatusProof,type FiscalStatusProof,sameFiscalNcf,fiscalNcfIdentity} from './FiscalStatusProof';
+import { onFiscalPrintHint, type FiscalPrintTerminalScope } from './FiscalPrintHint';
 export interface FiscalPrintEvidence {schemaVersion:1;qrUrl:string;securityCode:string;signedAt:string}
 export interface FiscalPrintDisplay extends FiscalPrintEvidence {certifiedNcf:string;dgiiAccepted:boolean;dgiiConditional?:boolean;effectiveBuyer?:Record<string,string>}
 const verified=new WeakSet<object>();
@@ -92,21 +93,147 @@ async function resolveWorkflowPrintDisplay(tx:Transaction):Promise<FiscalPrintDi
 }
 export const fiscalPrintTransaction=(tx:Transaction,display:FiscalPrintDisplay|undefined):Transaction=>
  isVerifiedFiscalPrintDisplay(display)&&display.effectiveBuyer?{...tx,customerSnapshot:{...display.effectiveBuyer,name:display.effectiveBuyer.name||''},customerName:display.effectiveBuyer.name||tx.customerName} as Transaction:tx;
-/** Explicit print/email readiness only. Financial completion never waits here; no provider or ISSUE endpoint exists in this client. */
-export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000,signal}:{timeoutMs?:number;signal?:AbortSignal}={}):Promise<FiscalPrintDisplay|undefined>{
- let display=await resolveFiscalPrintDisplay(tx);if(display||tx.fiscalProvider!=='MSELLER'||signal?.aborted)return display;
- const {fiscalWorkflowV2Client}=await import('./FiscalWorkflowV2Client');
- if(!fiscalWorkflowV2Client.enabled())return display;
- const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
- const budget=Math.max(0,Math.min(8000,timeoutMs)),deadline=Date.now()+budget;
- let finishDeadline:()=>void=()=>{};const stopped=new Promise<undefined>(resolve=>{finishDeadline=()=>resolve(undefined);});
- const timer=setTimeout(()=>{abort();finishDeadline();},budget);
- controller.signal.addEventListener('abort',finishDeadline,{once:true});
- try{
-  do{try{const state=await Promise.race([fiscalWorkflowV2Client.consult(tx.id,controller.signal),stopped]);if(!state)return display;display=await resolveFiscalPrintDisplay(tx);if(display||state.decision==='REJECTED'||state.state==='HELD'||state.state==='NEEDS_CORRECTION')return display;}catch{ return display; }
-   const left=deadline-Date.now();if(left<=0||controller.signal.aborted)break;
-   await new Promise<void>(resolve=>{const done=()=>{clearTimeout(wait);controller.signal.removeEventListener('abort',done);resolve();};const wait=setTimeout(done,Math.min(1500,left));controller.signal.addEventListener('abort',done,{once:true});});
-  }while(!controller.signal.aborted&&Date.now()<deadline);
-  return display;
- }finally{clearTimeout(timer);controller.signal.removeEventListener('abort',finishDeadline);controller.abort();signal?.removeEventListener('abort',abort);}
+/** First print after a sale may wait for the ERP signature; reprints keep the short default. */
+export const DEFAULT_FISCAL_PRINT_WAIT_MS=8000;
+export const MAX_FISCAL_PRINT_WAIT_MS=60000;
+/** Single clamp used by the readiness poll; never exceed the ERP worker's own budget. */
+export const resolveFiscalPrintBudget=(timeoutMs:number|undefined=DEFAULT_FISCAL_PRINT_WAIT_MS):number=>{
+ const requested=typeof timeoutMs==='number'&&Number.isFinite(timeoutMs)?timeoutMs:DEFAULT_FISCAL_PRINT_WAIT_MS;
+ return Math.max(0,Math.min(MAX_FISCAL_PRINT_WAIT_MS,requested));
+};
+
+export const requiresMSellerPrintSignature = (tx: Transaction): boolean =>
+ tx.fiscalProvider === 'MSELLER' && Boolean(tx.fiscalWorkflowCheckoutId);
+
+
+export function terminalUsesMSellerRealtimePrint(
+    transaction: Transaction,
+    terminals: BusinessConfig['terminals'],
+    binding: FiscalPrintTerminalScope,
+    deviceId: string,
+): boolean {
+    if (transaction.fiscalProvider !== 'MSELLER' || !transaction.fiscalWorkflowCheckoutId
+        || (transaction.ncfType !== 'E32' && transaction.ncfType !== 'E34')
+        || !fiscalNcfIdentity(transaction.electronicNcf || transaction.ncf)?.startsWith(transaction.ncfType + ':')
+        || !binding.tenantId || !binding.storeId || !binding.terminalId || !deviceId) return false;
+
+    const matches = (terminals || []).filter(({ id, config }) =>
+        (config.erpBinding?.terminalId || config.erpTerminalId || id) === binding.terminalId);
+    if (matches.length !== 1) return false;
+
+    const { id, config } = matches[0];
+    const terminal = config.erpBinding;
+    const matchesTerminal = (terminalId?: string) => terminalId === id || terminalId === binding.terminalId;
+    const issuance = transaction.fiscalIssuance;
+    return config.msellerRealtimePrintEnabled === true
+        && (config.currentDeviceId || terminal?.deviceId) === deviceId
+        && (!terminal?.tenantId || terminal.tenantId === binding.tenantId)
+        && (!terminal?.storeId || terminal.storeId === binding.storeId)
+        && matchesTerminal(transaction.terminalId)
+        && (!issuance || (issuance.tenantId === binding.tenantId && matchesTerminal(issuance.terminalId)));
+}
+
+export const MSELLER_PRINT_WAIT_MS = 30_000;
+
+/** Explicit print/email readiness. Only opted-in ticket printing waits for V2 evidence with private hints. */
+export async function resolveFiscalPrintReadiness(
+    tx: Transaction,
+    { timeoutMs, signal, waitForSignature = false, useRealtimeHint = false }: {
+        timeoutMs?: number;
+        signal?: AbortSignal;
+        waitForSignature?: boolean;
+        useRealtimeHint?: boolean;
+    } = {},
+): Promise<FiscalPrintDisplay | undefined> {
+    const initialDisplay = useRealtimeHint ? undefined : await resolveFiscalPrintDisplay(tx);
+    if (initialDisplay || tx.fiscalProvider !== 'MSELLER' || signal?.aborted) return initialDisplay;
+
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    const queuedWithoutHint = waitForSignature && !useRealtimeHint;
+    const budget = useRealtimeHint
+        ? Math.min(MSELLER_PRINT_WAIT_MS, resolveFiscalPrintBudget(timeoutMs ?? MSELLER_PRINT_WAIT_MS))
+        : resolveFiscalPrintBudget(timeoutMs);
+    const startedAt = Date.now();
+    const deadline = queuedWithoutHint ? Infinity : startedAt + budget;
+    const timer = queuedWithoutHint ? undefined : setTimeout(abort, budget);
+    const beforeAbort = <T>(task: () => Promise<T>): Promise<T | undefined> => new Promise((resolve, reject) => {
+        if (controller.signal.aborted) return resolve(undefined);
+        const stop = () => resolve(undefined);
+        controller.signal.addEventListener('abort', stop, { once: true });
+        void Promise.resolve().then(() => controller.signal.aborted ? undefined : task()).then(resolve, reject)
+            .finally(() => controller.signal.removeEventListener('abort', stop));
+    });
+
+    let hintSeen = false;
+    let hintPending = false;
+    let wake: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined;
+
+    try {
+        if (useRealtimeHint) {
+            const display = await beforeAbort(() => resolveWorkflowPrintDisplay(tx));
+            if (display || controller.signal.aborted) return display;
+        }
+        const workflow = await beforeAbort(() => import('./FiscalWorkflowV2Client'));
+        if (!workflow?.fiscalWorkflowV2Client.enabled()) return;
+        const { fiscalWorkflowV2Client } = workflow;
+        if (useRealtimeHint) {
+            unsubscribe = onFiscalPrintHint(tx.id, () => {
+                if (hintSeen) return;
+                hintSeen = true;
+                hintPending = true;
+                performance.mark(`clic-qa:fiscal-print-hint-wake:${tx.ncf}`);
+                wake?.();
+            });
+        }
+        do {
+            try {
+                const state = await beforeAbort(() => fiscalWorkflowV2Client.consult(tx.id, controller.signal));
+                if (!state) return;
+                const display = state.signature
+                    ? await beforeAbort(() => useRealtimeHint ? resolveWorkflowPrintDisplay(tx) : resolveFiscalPrintDisplay(tx))
+                    : undefined;
+                if (controller.signal.aborted) return;
+                if (display || state.decision === 'REJECTED' || state.state === 'HELD' || state.state === 'NEEDS_CORRECTION') return display;
+            } catch (error) {
+                if (controller.signal.aborted
+                    || /DISABLED|AUTH_REQUIRED|SESSION_EXPIRED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED|CREDENTIALS?_REQUIRED|SCOPE_CHANGED|DEVICE_CHANGED|SOURCE_MISMATCH|CONTEXT_CHANGED|RETAINED_SOURCE_REQUIRED|PROOF_INVALID/.test((error as Error)?.message || '')) return;
+            }
+
+            const left = deadline - Date.now();
+            if (left <= 0 || controller.signal.aborted) break;
+            if (!hintPending) {
+                await new Promise<void>(resolve => {
+                    const done = () => {
+                        clearTimeout(wait);
+                        controller.signal.removeEventListener('abort', done);
+                        wake = undefined;
+                        resolve();
+                    };
+                    const pollInterval = queuedWithoutHint && Date.now() - startedAt >= 30_000 ? 5000 : 1500;
+                    const wait = setTimeout(done, Math.min(pollInterval, left));
+                    wake = done;
+                    controller.signal.addEventListener('abort', done, { once: true });
+                });
+            }
+            hintPending = false;
+        } while (!controller.signal.aborted && Date.now() < deadline);
+    } finally {
+        unsubscribe?.();
+        clearTimeout(timer);
+        controller.abort();
+        signal?.removeEventListener('abort', abort);
+    }
+}
+
+/** Dispatch the existing durable batch and look up its timbre off the checkout path. */
+export async function prepareCommittedFiscalPrint(tx: Transaction): Promise<void> {
+ if (!requiresMSellerPrintSignature(tx)) return;
+ const { fiscalWorkflowV2Client } = await import('./FiscalWorkflowV2Client');
+ if (!fiscalWorkflowV2Client.enabled() || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+ const { durableOutboxBatchSender } = await import('../sync/DurableOutboxBatchSender');
+ await durableOutboxBatchSender.sendNext();
+ await resolveFiscalPrintReadiness(tx);
 }

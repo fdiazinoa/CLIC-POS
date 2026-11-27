@@ -51,6 +51,13 @@ export async function readRefundOriginal(captured: Transaction): Promise<Transac
  return current;
 }
 
+/** Copies the local annulment hold onto the durable original; never invents a commercial status. */
+const returnHoldFromCaptured = (captured: Transaction): Record<string, unknown> => {
+  const hold = captured as Transaction & { refundPendingErp?: boolean; pendingRefundStatus?: 'REFUNDED' | 'PARTIAL_REFUND' };
+  if (!hold.refundPendingErp) return {};
+  return { refundPendingErp: true, ...(hold.pendingRefundStatus ? { pendingRefundStatus: hold.pendingRefundStatus } : {}) };
+};
+
 export async function persistStandaloneRefundTransaction(
   refundTransaction: Transaction,
   options: PersistRefundOptions
@@ -96,7 +103,11 @@ export async function persistStandaloneRefundTransaction(
       assertRefundCommercialVersion(expectedOriginal,options.originalSource || originalTransaction);
     }
     const updatedOriginal = expectedOriginal && options.persistOriginal !== false ? {
-      ...expectedOriginal, status: originalTransaction!.status,
+      ...expectedOriginal,
+      // The annulment hold must reach the durable row: the ERP ACK path settles the original
+      // only when this intention is recorded. Older builds dropped it and left the sale COMPLETED.
+      ...returnHoldFromCaptured(originalTransaction),
+      status: originalTransaction!.status,
       relatedTransactions: Array.from(new Set([...(originalTransaction!.relatedTransactions || []), persistedRefund.id])),
       syncStatus: 'PENDING' as const,
     } : undefined;

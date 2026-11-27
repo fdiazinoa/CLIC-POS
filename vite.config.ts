@@ -75,6 +75,8 @@ export default defineConfig(({ mode }) => {
             if (diagnostic && (id.includes('preload-helper') || id.includes('commonjsHelpers'))) return 'pos-diagnostics-support';
             if (diagnostic && id.includes('/diagnostics/runtime.ts')) return 'pos-diagnostics';
             if (diagnostic && id.includes('/zone.js/')) return 'pos-diagnostics-zone';
+            // Keep the entry's dynamic import helper independent of feature chunks.
+            if (id === '\0vite/preload-helper.js') return 'vite-preload';
             if (id.includes('node_modules')) {
               if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
                 return 'vendor-react';
@@ -101,7 +103,8 @@ export default defineConfig(({ mode }) => {
               return 'vendor-misc';
             }
 
-            if (id.includes('/components/POSInterface.tsx')) {
+            // The root error boundary is eager even when an optional screen uses it.
+            if (id.includes('/components/POSInterface.tsx') || id.includes('/components/ErrorBoundary.tsx')) {
               return 'pos-shell';
             }
             if (id.includes('/components/TableMap.tsx') || id.includes('/components/TableLayoutDesigner.tsx')) {
@@ -133,15 +136,6 @@ export default defineConfig(({ mode }) => {
               id.includes('/components/CurrencySettings.tsx')
             ) {
               return 'settings-suite';
-            }
-            if (
-              id.includes('/components/CatalogManager.tsx') ||
-              id.includes('/components/ProductForm.tsx') ||
-              id.includes('/components/ClassificationManager.tsx') ||
-              id.includes('/components/RecipeManager.tsx') ||
-              id.includes('/components/VariantManager.tsx')
-            ) {
-              return 'catalog-suite';
             }
             if (
               id.includes('/components/FinanceDashboard.tsx') ||

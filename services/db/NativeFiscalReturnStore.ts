@@ -5,6 +5,7 @@ import type { DurableDocumentMutation, FinancialCommitInput } from './DatabaseAd
 import { planFinancialNumbers } from './FinancialNumberReservation';
 import { assertRetirementHasNoEffects } from './FiscalWorkflowRetirementStore';
 import { financialIdentity } from './LargeMasterSyncV3FinancialRetention';
+import { settleOriginalReturnAnnulment } from '../fiscal/ReturnFiscalState';
 type SQL = {
     query: (sql: string, values?: any[]) => Promise<{
         values?: any[];
@@ -61,6 +62,13 @@ export class NativeFiscalReturnStore {
     private async read(column: string, value: string) { const r = (await this.connection().query(`SELECT data FROM pos_fiscal_return_attempts_v1 WHERE ${column}=?`, [value])).values?.[0]; return r ? JSON.parse(r.data) as ReturnAttempt : null; }
     get(id: string) { return this.locked(() => this.read('id', id)); }
     byTransaction(id: string) { return this.locked(() => this.read('transaction_id', id)); }
+    /** Committed returns are idempotent ACK replays: boot recovery re-runs settlement/sync projection. */
+    committed() {
+        return this.locked(async () => {
+            const rows = (await this.connection().query("SELECT data FROM pos_fiscal_return_attempts_v1 WHERE phase='COMMITTED'")).values || [];
+            return rows.map(row => JSON.parse(row.data) as ReturnAttempt);
+        });
+    }
     active(scope: FiscalWorkflowScope, originalId: string) {
         return this.locked(async () => {
             const rows = (await this.connection().query("SELECT data FROM pos_fiscal_return_attempts_v1 r WHERE json_extract(json_extract(data,'$.intent'),'$.originalId')=? AND NOT EXISTS(SELECT 1 FROM pos_fiscal_checkouts_v2 c WHERE c.transaction_id=r.transaction_id AND c.phase='ACKNOWLEDGED')", [originalId])).values || [];
@@ -117,6 +125,21 @@ export class NativeFiscalReturnStore {
                 if (event?.status !== 'APPLIED_ERP')
                     return;
                 returnNeed(sameReturn(JSON.parse(event.payload_json).fiscalReturnContract, returnContract(a)), 'FISCAL_RETURN_ACK_CONFLICT');
+            }
+            // The original sale stays non-annulled until this ERP ACK; now the durable intention applies.
+            const originalId = a.preparation!.originalReference.transactionId;
+            for (const collection of ['transactions', 'transactionHistory']) {
+                const originalRow = (await this.connection().query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?', [collection, originalId])).values?.[0];
+                if (!originalRow) continue;
+                const original = JSON.parse(originalRow.data);
+                let settled = settleOriginalReturnAnnulment(original);
+                if (settled === original && original.status === 'COMPLETED') {
+                    // Older builds committed the NC without persisting the local hold. The ACK gate above
+                    // already proved NC+PAYMENT APPLIED_ERP, so the annulment is safe to apply now.
+                    const refunded = Number(a.preparation!.returnSnapshot.total) >= Number(original.total);
+                    settled = { ...original, status: refunded ? 'REFUNDED' : 'PARTIAL_REFUND' };
+                }
+                if (settled !== original) await this.connection().run('UPDATE documents SET data=? WHERE collection_name=? AND doc_id=?', [JSON.stringify(settled), collection, originalId], false);
             }
             const current = (await this.connection().query('SELECT checkout_json FROM pos_fiscal_checkouts_v2 WHERE checkout_id=?', [a.checkout!.checkoutId])).values?.[0];
             const checkout = current && JSON.parse(current.checkout_json);

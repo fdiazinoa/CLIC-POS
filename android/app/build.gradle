@@ -58,6 +58,7 @@ android {
     }
     defaultConfig {
         applicationId "com.clicpos.app"
+        buildConfigField "boolean", "POS_FISCAL_LOCAL_SIGNING_QA", "false"
         buildConfigField "boolean", "POS_DIAGNOSTICS", System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false"
         buildConfigField "boolean", "WEBVIEW_PROFILE_QA", webviewProfileQa ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -88,6 +89,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            if (System.getenv("CLIC_POS_QA_DCPTEST") == "true") applicationIdSuffix ".dcptest"
+            def signingQa = System.getenv("VITE_POS_FISCAL_LOCAL_SIGNING_QA") == "true"
+            buildConfigField "boolean", "POS_FISCAL_LOCAL_SIGNING_QA", signingQa ? "true" : "false"
+        }
         release {
             if (v3Canary && signedV3CanaryOptIn) versionNameSuffix '-canary'
             if (v3Candidate && signedV3CandidateOptIn && !plainVersionName) versionNameSuffix '-v3-candidate'
@@ -149,6 +155,7 @@ dependencies {
     implementation "androidx.webkit:webkit:1.12.1"
     implementation "com.machinezoo.sourceafis:sourceafis:3.18.1"
     implementation project(':capacitor-android')
+    debugImplementation 'org.apache.santuario:xmlsec:2.3.5'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

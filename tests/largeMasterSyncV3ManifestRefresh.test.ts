@@ -14,7 +14,14 @@ const parsed = ts.createSourceFile('SyncManager.ts', source, ts.ScriptTarget.Lat
 const cls = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'SyncManager') as ts.ClassDeclaration;
 const method = (name: string) => cls.members.find(node => node.name?.getText(parsed) === name)!.getText(parsed);
 // Execute actual public wrapper and private implementation; native/session/storage I/O are isolated.
-const actual = ['manualCatalogSync', 'manualSyncAll', 'v3CatalogRefresh', 'refreshV3Catalog', 'reconcileTerminalManifest', 'syncTerminalManifestInBackground'].map(method).join('\n');
+// `reconcileTerminalManifest` resolves the persisted/local classification base
+// through these private helpers, so the isolated Subject must carry them too.
+const actual = [
+  'manualCatalogSync', 'manualSyncAll', 'v3CatalogRefresh', 'refreshV3Catalog',
+  'reconcileTerminalManifest', 'syncTerminalManifestInBackground',
+  'loadPersistedConfigForActiveBinding', 'findBoundTerminalForContext',
+  'hasAnyPersistedCatalogClassification',
+].map(method).join('\n');
 
 async function fixture() {
   const storage = new Map<string, string>(); const events: string[] = [];
@@ -80,6 +87,8 @@ async function fixture() {
     } }, CustomEvent: class { constructor(public type: string, public options?: object) {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: () => onWait(),
+    normalizeCanonicalErpTerminalId: (value: unknown) =>
+      (typeof value === 'string' && value.trim() ? value.trim() : null),
     apiSyncAdapter: { isErpActiveOperationalTarget: () => true }, console: { warn() {}, info() {} },
     ERP_SUPPORTED_MASTER_COLLECTIONS: new Set(),
   };

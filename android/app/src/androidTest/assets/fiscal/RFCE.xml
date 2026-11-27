@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='utf-8'?>
+<RFCE>
+  <Encabezado>
+    <Version>1.0</Version>
+    <IdDoc>
+      <TipoeCF>32</TipoeCF>
+      <eNCF>E320000000001</eNCF>
+      <TipoIngresos>01</TipoIngresos>
+      <TipoPago>1</TipoPago>
+    </IdDoc>
+    <Emisor>
+      <RNCEmisor>999999999</RNCEmisor>
+      <RazonSocialEmisor>EMISOR SINTETICO QA</RazonSocialEmisor>
+      <FechaEmision>25-11-2026</FechaEmision>
+    </Emisor>
+    <Comprador><RazonSocialComprador>Consumidor Final</RazonSocialComprador></Comprador><Totales>
+      <MontoExento>192.00</MontoExento>
+      <MontoTotal>192.00</MontoTotal>
+    </Totales>
+    <CodigoSeguridadeCF>AAAAAA</CodigoSeguridadeCF>
+  </Encabezado>
+</RFCE>

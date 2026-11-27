@@ -51,15 +51,17 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const [settlementDestination,setSettlementDestination]=useState<ReturnSettlementDestination>('ORIGINAL_PAYMENT');
     const fiscalOperationRef=useRef(createUuid());const [fiscalCode,setFiscalCode]=useState<''|'1'|'2'|'3'>('');const [fiscalKind,setFiscalKind]=useState<'RETURN'|'VOID'>('RETURN');
 
+    const isGatewayRefundMode = mode === 'AZUL_GATEWAY_REFUND';
+    const gatewayRemainingQuantities = isGatewayRefundMode ? remainingQuantities : undefined;
     useEffect(() => {
         if (isOpen && transaction) {
             fiscalOperationRef.current=createUuid();setFiscalCode('');setFiscalKind('RETURN');
             const initialQuantities = new Map<string, number>();
-            if (mode === 'AZUL_GATEWAY_REFUND') {
+            if (isGatewayRefundMode) {
                 transaction.items.forEach(item => {
                     initialQuantities.set(item.cartId, Math.min(
                         item.quantity,
-                        remainingQuantities?.get(getRefundItemKey(item)) ?? item.quantity
+                        gatewayRemainingQuantities?.get(getRefundItemKey(item)) ?? item.quantity
                     ));
                 });
             }
@@ -73,7 +75,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             setItemConditions(initialConditions);
             setReason('');
         }
-    }, [isOpen, mode, remainingQuantities, transaction]);
+    }, [isOpen, isGatewayRefundMode, gatewayRemainingQuantities, transaction]);
 
     let settlementContext='';try{if(isOpen)settlementContext=captureFiscalStatusBoundContext().fingerprint;}catch{/* Binding unavailable: no new settlement choice. */}
     useEffect(()=>{
@@ -86,7 +88,6 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
     if (!isOpen || !transaction) return null;
 
-    const isGatewayRefundMode = mode === 'AZUL_GATEWAY_REFUND';
     const getMaxRefundQuantity = (item: CartItem) =>
         Math.max(0, Math.min(
             Math.abs(Number(item.quantity || 0)),
@@ -137,8 +138,12 @@ export const RefundModal: React.FC<RefundModalProps> = ({
         (refundQuantities.get(item.cartId) || 0) === getMaxRefundQuantity(item)
     );
 
+    const selectionExceedsBalance = !settlementState?.locked && transaction.items.some(
+        item => (refundQuantities.get(item.cartId) ?? 0) > getMaxRefundQuantity(item)
+    );
+    const canConfirm = refundQuantities.size > 0 && !selectionExceedsBalance;
     const handleConfirm = async () => {
-        if (submittingRef.current || refundQuantities.size === 0) return;
+        if (submittingRef.current || !canConfirm) return;
         submittingRef.current=true; setSubmitting(true); setSubmitError('');
         try {
 
@@ -337,6 +342,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
                 </div>
 
+                {selectionExceedsBalance && <p role="status" className="px-6 text-amber-700">Cambió la cantidad disponible para devolución. Ajusta las cantidades seleccionadas.</p>}
                 {submitError && <p role="alert" className="px-6 text-red-600">{submitError}</p>}
                 {/* Footer */}
                 <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex justify-between items-center">
@@ -362,10 +368,10 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         </button>
                         <button
                             onClick={handleConfirm}
-                            disabled={submitting || refundQuantities.size === 0}
+                            disabled={submitting || !canConfirm}
                             className={`
                  px-6 py-2.5 rounded-xl font-bold text-white flex items-center gap-2 shadow-lg transition-all
-                 ${refundQuantities.size === 0
+                 ${!canConfirm
                                     ? 'bg-gray-300 cursor-not-allowed shadow-none'
                                     : 'bg-red-600 hover:bg-red-700 active:scale-[0.98] shadow-red-500/30'}
                `}

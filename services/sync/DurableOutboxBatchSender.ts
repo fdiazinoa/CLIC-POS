@@ -8,6 +8,7 @@ import {
     type DurableOutboxRepository,
 } from './DurableOutboxRepository';
 import { syncMetrics } from './SyncMetrics';
+import { AUTHORITY_CONTEXT_RETRY_HELD, boundedDurableRetry } from './DurableOutboxRetryPolicy';
 import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 
 export const POS_2B_MAX_TRANSACTIONS = 25;
@@ -48,6 +49,8 @@ export interface DurableBatchSendSummary {
     rejected: number;
     deferred: number;
     payloadBytes: number;
+    /** Earliest durable retry instant scheduled by this batch (diagnostics/rollback visibility). */
+    nextRetryAt?: string | null;
 }
 
 type BatchTransport = (events: DurableOutboxWireEvent[]) => Promise<any>;
@@ -114,10 +117,23 @@ export const selectDurableBatch = (
     };
 };
 
-const normalizeStatus = (result: any): string => String(
-    result?.disposition || result?.inboxStatus || result?.inbox_status
-    || result?.status || result?.state || result?.appliedStatus || result?.applied_status || ''
-).trim().toUpperCase();
+const normalizeStatus = (result: any): string => {
+    const explicit = String(
+        result?.disposition || result?.inboxStatus || result?.inbox_status
+        || result?.status || result?.state || result?.appliedStatus || result?.applied_status || ''
+    ).trim().toUpperCase();
+    if (explicit) return explicit;
+    // Idempotent replay: an ERP that only reports the applied flags must still settle the event, otherwise
+    // a lost ACK would be re-pushed forever even though the sale already exists.
+    if (result?.applied === true) {
+        return result?.alreadyApplied === true ? 'ALREADY_APPLIED'
+            : result?.duplicate === true ? 'DUPLICATE_APPLIED' : 'APPLIED';
+    }
+    if (result?.duplicate === true && String(result?.inboxStatus || result?.inbox_status || '').toUpperCase() === 'APPLIED') {
+        return 'ALREADY_APPLIED';
+    }
+    return '';
+};
 
 const appliedStatus=(status:string)=>['APPLIED','APPLIED_ERP','DUPLICATE','DUPLICATE_APPLIED','ALREADY_APPLIED'].includes(status);
 const dispatchCapture=(record:DurableOutboxRecord)=>record.eventType==='SALE_POSTED'&&Boolean(record.payload?.transaction?.companyDispatchSource);
@@ -140,13 +156,20 @@ const retryDelay = (attemptCount: number): number => {
 };
 
 export class DurableOutboxBatchSender {
+    private pending: Promise<unknown> = Promise.resolve();
     constructor(
         private readonly repository: DurableOutboxRepository = durableOutboxRepository,
         private readonly transport: BatchTransport = events => apiSyncAdapter.pushDurableOutboxBatch(events),
         private readonly readDispatchProofs:(eventIds:string[])=>Promise<DispatchAdoptionProof[]>=readDispatchAdoptionProofs,
     ) {}
 
-    async sendNext(now = new Date()): Promise<DurableBatchSendSummary> {
+    sendNext(now?: Date): Promise<DurableBatchSendSummary> {
+        const batch = this.pending.then(() => this.sendBatch(now ?? new Date()));
+        this.pending = batch.catch(() => undefined);
+        return batch;
+    }
+
+    private async sendBatch(now: Date): Promise<DurableBatchSendSummary> {
         const owner = `pos-2b:${now.getTime()}:${Math.random().toString(36).slice(2, 10)}`;
         await this.repository.recoverExpiredLeases(now);
         await this.repository.repairLegacyEventContracts?.(now);
@@ -166,6 +189,7 @@ export class DurableOutboxBatchSender {
             rejected: selection.oversized.length,
             deferred: selection.deferred.length,
             payloadBytes: selection.payloadBytes,
+            nextRetryAt: null,
         };
 
         await this.repository.releaseUnsent(selection.deferred.map(record => record.eventId));
@@ -192,14 +216,18 @@ export class DurableOutboxBatchSender {
             const retryAfterMs = Number.isFinite(requestedRetryAfterMs) && requestedRetryAfterMs > 0
                 ? Math.min(MAX_RETRY_MS, requestedRetryAfterMs)
                 : null;
+            let earliestRetry: number | null = null;
             for (const record of selection.events) {
-                await this.repository.markRetry(
-                    record.eventId,
-                    message,
-                    new Date(now.getTime() + (retryAfterMs || retryDelay(record.attemptCount))),
-                );
+                // Authority rotations abort in-flight requests. The batch is immutable and idempotent, so it
+                // retries, but never every 5 minutes forever: repeated authority aborts get an explicit hold.
+                const bounded = boundedDurableRetry(record.attemptCount + 1, message, BASE_RETRY_MS, MAX_RETRY_MS);
+                const reason = bounded.held ? `${AUTHORITY_CONTEXT_RETRY_HELD}: ${message}` : message;
+                const retryAt = now.getTime() + (retryAfterMs || bounded.delayMs);
+                earliestRetry = earliestRetry === null ? retryAt : Math.min(earliestRetry, retryAt);
+                await this.repository.markRetry(record.eventId, reason, new Date(retryAt));
                 summary.retrying++;
             }
+            if (earliestRetry !== null) summary.nextRetryAt = new Date(earliestRetry).toISOString();
             return summary;
         }
 

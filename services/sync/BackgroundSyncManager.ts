@@ -15,7 +15,9 @@ import { authenticatedActivityTracker } from './AuthenticatedActivityTracker';
 import { syncMetrics } from './SyncMetrics';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { durableOutboxBatchSender } from './DurableOutboxBatchSender';
+import { flushDurableOutboxNow as flushDurableOutboxImmediately } from './DurableOutboxImmediateFlush';
 import { durableOutboxRepository } from './DurableOutboxRepository';
+import { DURABLE_OUTBOX_COMMITTED_EVENT } from './DurableOutboxCommitSignal';
 import {
     transferReceiptService,
     type TransferReceiptQueueItem,
@@ -40,6 +42,7 @@ class BackgroundSyncManager {
     private isProcessing = false;
     private interval: any = null;
     private retryTimeout: any = null;
+    private retryTimeoutAt: number | null = null;
     private initialized = false;
     private remoteEnabled = true;
     private remoteGeneration = 0;
@@ -50,6 +53,9 @@ class BackgroundSyncManager {
     private visibilityHandler: (() => void) | null = null;
     private saleActivityHandler: (() => void) | null = null;
     private nextRetryDelayMs: number | null = null;
+    private durableOutboxCommitHandler: (() => void) | null = null;
+    private immediateFlushListenerAttached = false;
+    private immediateFlushRunner: typeof flushDurableOutboxImmediately | null = null;
     private state: SyncState = {
         pendingCount: 0,
         blockedCount: 0,
@@ -57,6 +63,52 @@ class BackgroundSyncManager {
         hasError: false,
         lastSyncTime: null
     };
+    constructor() {
+        this.attachDurableOutboxCommitListener();
+    }
+
+    /**
+     * The durable commit signal is the only trigger that survives every checkout
+     * completion path (retained dispatch receipt, fiscal replay, article-format
+     * mirror, plain legacy/V3). App call sites stay as a redundant, coalesced
+     * path; the listener does not depend on the manager being initialized or on
+     * `remoteEnabled` (the durable sender is independent of the worker schedule).
+     */
+    private resolveImmediateFlushRunner(): typeof flushDurableOutboxImmediately {
+        if (this.immediateFlushRunner) return this.immediateFlushRunner;
+        // `typeof` keeps isolated class harnesses (tests) from crashing when the
+        // imported sender is not part of their sandbox; production always has it.
+        if (typeof flushDurableOutboxImmediately !== 'function') {
+            throw new Error('OUTBOX_FLUSH_SENDER_UNAVAILABLE');
+        }
+        this.immediateFlushRunner = flushDurableOutboxImmediately;
+        return this.immediateFlushRunner;
+    }
+
+    private attachDurableOutboxCommitListener() {
+        if (this.immediateFlushListenerAttached) return;
+        if (typeof DURABLE_OUTBOX_COMMITTED_EVENT !== 'string') return;
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+        this.immediateFlushListenerAttached = true;
+        this.durableOutboxCommitHandler = () => {
+            void this.flushDurableOutboxNow('sale-commit').catch(error => this.logImmediateFlushError('commit-signal', error));
+        };
+        window.addEventListener(DURABLE_OUTBOX_COMMITTED_EVENT, this.durableOutboxCommitHandler);
+    }
+
+    private logImmediateFlushError(stage: string, error: unknown, reason: string = 'sale-commit') {
+        try {
+            console.error(JSON.stringify({
+                event: 'pos_outbox_immediate_flush_error',
+                stage,
+                reason,
+                error: error instanceof Error ? error.message : String(error || 'FLUSH_FAILED'),
+            }));
+        } catch {
+            // Logging must never break the checkout path.
+        }
+    }
+
     private readonly WORKER_INTERVAL_MS = 30000;
     private readonly FAST_RETRY_DELAY_MS = 5000;
     private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
@@ -190,9 +242,9 @@ class BackgroundSyncManager {
     }
 
     private clearRetryTimeout() {
-        if (!this.retryTimeout) return;
-        clearTimeout(this.retryTimeout);
+        if (this.retryTimeout !== null) clearTimeout(this.retryTimeout);
         this.retryTimeout = null;
+        this.retryTimeoutAt = null;
     }
 
     private scheduleSync(delayMs = this.FAST_RETRY_DELAY_MS) {
@@ -204,10 +256,14 @@ class BackgroundSyncManager {
             return;
         }
 
-        if (this.retryTimeout) return;
+        const retryAt = Date.now() + delayMs;
+        if (this.retryTimeoutAt !== null && this.retryTimeoutAt <= retryAt) return;
 
+        this.clearRetryTimeout();
+        this.retryTimeoutAt = retryAt;
         this.retryTimeout = setTimeout(() => {
             this.retryTimeout = null;
+            this.retryTimeoutAt = null;
             void this.sync();
         }, delayMs);
     }
@@ -561,9 +617,10 @@ class BackgroundSyncManager {
             shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
+            let durableRetryAt: number | null = null;
             try {
                 if (!isPosSaleActive()) {
-                    await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+                    durableRetryAt = await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
                 } else {
                     pausedForSaleActivity = true;
                 }
@@ -581,7 +638,9 @@ class BackgroundSyncManager {
                 && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
                 const unsupportedAuditOnly = (!isSyncFeatureEnabled('pos_operational_audit') || !['ERP_ACTIVE', 'POS_CLOUD_STAGING'].includes(operationalTarget.kind))
                     && !shouldRetrySoon && this.state.pendingCount === this.auditPendingCount;
-                this.scheduleSync(unsupportedAuditOnly ? this.WORKER_INTERVAL_MS : this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
+                const defaultDelay = unsupportedAuditOnly ? this.WORKER_INTERVAL_MS : this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS;
+                const durableDelay = durableRetryAt != null ? Math.max(1000, durableRetryAt - Date.now()) : defaultDelay;
+                this.scheduleSync(Math.min(defaultDelay, durableDelay));
             }
         }
     }
@@ -762,12 +821,13 @@ class BackgroundSyncManager {
 
     private async updatePendingCount(collectionOverride?: string[]) {
         const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents()||await durableOutboxRepository.hasPendingReturnEvents();
+        let durableRetryAt: number | null = null;
         let count = 0;
         let blockedCount = 0;
         let auditPendingCount = 0;
         let oldestCreatedAt: number | null = null;
         if (durableBatchActive && durableOutboxRepository.isSupported()) {
-            await durableOutboxRepository.refreshMetrics();
+            durableRetryAt = await durableOutboxRepository.refreshMetrics();
             const durableMetrics = syncMetrics.getSnapshot();
             count = durableMetrics.outbox_pending_count;
             oldestCreatedAt = durableMetrics.outbox_oldest_age > 0
@@ -817,6 +877,7 @@ class BackgroundSyncManager {
         syncMetrics.setOutboxState(count, oldestCreatedAt);
         this.auditPendingCount = auditPendingCount;
         this.updateState({ pendingCount: count, blockedCount });
+        return durableRetryAt;
     }
 
     private updateState(newState: Partial<SyncState>) {
@@ -834,6 +895,38 @@ class BackgroundSyncManager {
 
     getState() {
         return this.state;
+    }
+
+    /**
+     * Immediate, idempotent push of already-durable outbox events after a sale/payment commit.
+     * Deliberately bypasses the sale-activity window (only the small durable batch is pushed), so the
+     * SALE_POSTED+PAYMENT_POSTED batch reaches the ERP now instead of waiting for the next 30 s worker
+     * tick or the end of the cashier success-screen interactions. Rollback: flag
+     * `pos_outbox_immediate_flush` (default on) — no contract change either way.
+     */
+    async flushDurableOutboxNow(reason: 'sale-commit' | 'payment-commit' | 'manual' = 'sale-commit') {
+        // Never silently return: `remoteEnabled`/`initialized` gate only the
+        // background worker schedule, not the durable sender. Log the state so a
+        // real device trace can prove the flush path executed.
+        if (!this.remoteEnabled || !this.initialized) {
+            try {
+                console.warn(JSON.stringify({
+                    event: 'pos_outbox_immediate_flush_gate',
+                    reason,
+                    remoteEnabled: this.remoteEnabled,
+                    initialized: this.initialized,
+                    action: 'flush_attempted_anyway',
+                }));
+            } catch {
+                // Diagnostics only.
+            }
+        }
+        try {
+            return await this.resolveImmediateFlushRunner()(reason);
+        } catch (error) {
+            this.logImmediateFlushError('manager', error, reason);
+            return null;
+        }
     }
 
     /**

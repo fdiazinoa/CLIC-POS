@@ -1,4 +1,6 @@
-import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
+import { attributeCheckoutDocumentRead, captureCheckoutDocumentReader, withCheckoutDocumentReadTrace } from '../../CheckoutDocumentReadTrace';
+import { recordCheckoutDiagnostic } from '../../CheckoutDiagnostics';
+import { markSettingsReturnQa, measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
@@ -79,6 +81,14 @@ const DOCUMENT_UPSERT_SQL = `
         updatedAt = excluded.updatedAt
 `;
 
+// Identical canonical config need not be updated, except when its write can run a
+// fiscal authority or format guard. The replacement's deletes and UPSERT share one transaction.
+const CONFIG_REPLACE_UPSERT_SQL = `${DOCUMENT_UPSERT_SQL}
+    WHERE documents.data IS NOT excluded.data
+       OR json_extract(documents.data, '$.articleFormatEventId') IS NOT NULL
+       OR EXISTS (SELECT 1 FROM pos_offline_fiscal_allocations_v2 WHERE revoked = 0)
+`;
+
 type SQLiteBridgeModule = typeof import('@capacitor-community/sqlite');
 type SQLiteConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteConnection']>;
 type SQLiteDBConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteDBConnection']>;
@@ -123,6 +133,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     getLocalInventoryDelta: 'read',
     assertCanRefresh: 'read',
     getLocalInventoryDeltas: 'read',
+    readOperationalCatalogSale: 'read',
     getOperationalSupports: 'read',
     replaceInventorySnapshot: 'write',
     getInventorySnapshotVersion: 'read',
@@ -145,24 +156,38 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly fiscalCreditApplicationStore=new NativeFiscalCreditApplicationStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly fiscalReturnStore=new NativeFiscalReturnStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
-    public readonly masterSyncV3Store = this.serializedMasterStore();
+    private readonly ownedMasterSyncV3Store = this.createMasterStore();
+    public readonly masterSyncV3Store = this.serializedMasterStore(this.ownedMasterSyncV3Store);
 
-    private serializedMasterStore():LargeMasterSyncV3SqliteStore {
-        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
+    private createMasterStore(): LargeMasterSyncV3SqliteStore {
+        return new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
             try { return await operation(); }
             catch(error) {
                 if(error instanceof LargeMasterSyncV3Error && error.code==='SYNC_V3_CONNECTION_UNCERTAIN') this.financialConnectionError=error;
                 throw error;
             }
         }),undefined,()=>this.readConfigOwned());
+    }
 
+    private serializedMasterStore(store: LargeMasterSyncV3SqliteStore): LargeMasterSyncV3SqliteStore {
         return new Proxy(store,{get:(target,key)=>{
             const value=Reflect.get(target,key);
             if(typeof value!=='function') return value;
             // Internal calls retain the raw target and explicit connection. Public observers wait for committed state.
             const mode=NATIVE_V3_METHOD_CONCURRENCY[key as keyof typeof NATIVE_V3_METHOD_CONCURRENCY];
             if(!mode) throw new Error('NATIVE_MASTER_STORE_METHOD_UNCLASSIFIED:'+String(key));
-            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(async()=>{
+            if (mode === 'write') return value.bind(target);
+            if (key === 'readOperationalCatalogSale') {
+                return (...args: Parameters<LargeMasterSyncV3SqliteStore['readOperationalCatalogSale']>) => {
+                    const observe = args[3];
+                    observe?.('QUEUE_START');
+                    return measureSettingsReturnQa('sqlite.read.catalogPrimary', () => this.withWriteLock(() => {
+                        observe?.('QUEUE_END');
+                        return measureSettingsReturnQa('sqlite.lane.read.catalogPrimary', () => target.readOperationalCatalogSale(...args));
+                    }));
+                };
+            }
+            return (...args:any[])=>this.withWriteLock(async()=>{
                 try { return await value.apply(target,args); }
                 catch(error) {
                     if(error instanceof BaselineReferenceConnectionUncertainError) this.financialConnectionError=error;
@@ -217,6 +242,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     ? measureSettingsReturnQa('sqlite.read', () => query(...args), args[0], args[1])
                     : query(...args);
             }
+            this.db.query = withCheckoutDocumentReadTrace(this.db.query.bind(this.db));
             if (!(await this.db.isDBOpen()).result) await this.db.open();
             // A write blocked by another connection must fail (and be retried) instead of hanging
             // forever: an unsettled native write stalls the whole write queue and the cashier can
@@ -271,13 +297,16 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {
-        const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName));
+        const reader = captureCheckoutDocumentReader('getCollection');
+        const docs = await this.withWriteLock(() => collectionName === 'config'
+            ? measureSettingsReturnQa('sqlite.lane.read.fullConfig', () => this.readStoredDocuments(collectionName, reader))
+            : this.readStoredDocuments(collectionName, reader));
         return this.fromStoredDocuments(collectionName, docs);
     }
 
     /** Same decoder, compaction and current-document selection as getCollection, under an existing owner. */
     private async readConfigOwned():Promise<import('../../../types').BusinessConfig> {
-        const docs=await this.readStoredDocuments('config');
+        const docs = await measureSettingsReturnQa('sqlite.lane.read.ownedFullConfig', () => this.readStoredDocuments('config'));
         if(!docs.some(doc=>doc&&typeof doc==='object'&&!Array.isArray(doc)&&doc.id!=='_db_initialized'&&doc.id!=='config_metadata')){
             throw new Error('SYNC_V3_BINDING_CHANGED');
         }
@@ -287,6 +316,21 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
         const docs = this.toStoredDocuments(collectionName, data);
         await this.replaceStoredDocuments(collectionName, docs);
+    }
+
+    async saveConfigIfUnchanged(expected: import('../../../types').BusinessConfig,
+        next: import('../../../types').BusinessConfig): Promise<boolean> {
+        const expectedJson = JSON.stringify(expected);
+        const updatedJson = JSON.stringify({ ...compactStoredTerminalCatalog(next), id: 'current' });
+        return this.withWriteLock(() => this.withNativeTransaction(async () => {
+            const db = this.ensureDb();
+            await db.run(
+                "UPDATE documents SET data=?,updatedAt=? WHERE collection_name='config' AND doc_id='current' AND data=?",
+                [updatedJson, new Date().toISOString(), expectedJson], false,
+            );
+            const changed = await db.query('SELECT changes() AS changed');
+            return Number(changed.values?.[0]?.changed) === 1;
+        }));
     }
 
     async compareAndSwapV3SetupConfig(expected: import('../../../types').BusinessConfig,
@@ -482,7 +526,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await this.executeUnlocked([...replaceCollections.flatMap(name => this.collectionReplacementStatements(name,documents.filter(d=>d.collectionName===name).map(d=>d.document.id),now)), ...documents.map(({ collectionName, document }) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
-            })), ...fiscalStatements], needsFinancialPrecondition ? precondition : undefined);
+            })), ...fiscalStatements], needsFinancialPrecondition ? precondition : undefined,
+                false, undefined, 'atomicDocuments');
             for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
         });
     }
@@ -561,7 +606,70 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
-        return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+        const reader = captureCheckoutDocumentReader('getDocument');
+        return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id,reader));
+    }
+
+    readV3OperationalAuthorityConfig(): Promise<import('../../sync/LargeMasterSyncV3OperationalConfigScope').V3OperationalAuthorityConfig | null> {
+        return this.withWriteLock(() => this.readV3OperationalAuthorityConfigOwned());
+    }
+
+    readV3OperationalAuthority(...[runtime, assertConfig, observe]: Parameters<NonNullable<DatabaseAdapter['readV3OperationalAuthority']>>) {
+        observe('QUEUE_START');
+        return this.withWriteLock(async () => {
+            observe('QUEUE_END');
+            observe('CONFIG_START');
+            try {
+                const combined = await this.ownedMasterSyncV3Store.readOperationalSnapshot(runtime, true);
+                if (combined.configTerminals) {
+                    assertConfig({ terminals: combined.configTerminals });
+                    return combined;
+                }
+                const config = await this.readV3OperationalAuthorityConfigOwned() ?? await this.readConfigOwned();
+                assertConfig(config);
+            } finally {
+                observe('CONFIG_END');
+            }
+            observe('SNAPSHOT_START');
+            try {
+                return await this.ownedMasterSyncV3Store.readOperationalSnapshot(runtime);
+            } finally {
+                observe('SNAPSHOT_END');
+            }
+        });
+    }
+
+    private async readV3OperationalAuthorityConfigOwned() {
+        // Other config layouts go through the legacy reader, which owns the precedence and error rules.
+        // JSON values preserve types and complete policy objects for the shared JS scope check.
+        const result = await this.ensureDb().query(`
+            SELECT CASE WHEN json_valid(doc.data) THEN CASE
+                WHEN (doc.data ->> '$.id') = 'current'
+                AND json_type(doc.data, '$.terminals') = 'array'
+                AND NOT EXISTS (
+                    SELECT 1 FROM json_each(doc.data, '$.terminals') AS terminal
+                    WHERE CASE WHEN terminal.type = 'object' THEN json_type(terminal.value, '$.config') END IS NOT 'object'
+                )
+                THEN (SELECT json_group_array(json_object(
+                    'id', terminal.value -> '$.id',
+                    'config', json_object(
+                        'erpTerminalId', terminal.value -> '$.config.erpTerminalId',
+                        'currentDeviceId', terminal.value -> '$.config.currentDeviceId',
+                        'erpBinding', terminal.value -> '$.config.erpBinding',
+                        'inventoryScope', terminal.value -> '$.config.inventoryScope',
+                        'pricing', terminal.value -> '$.config.pricing',
+                        'fiscal', terminal.value -> '$.config.fiscal'
+                    )
+                )) FROM json_each(doc.data, '$.terminals') AS terminal)
+            END END AS terminals
+            FROM documents AS doc
+            WHERE doc.collection_name = ? AND doc.doc_id = ?
+            AND NOT EXISTS (
+                SELECT 1 FROM documents AS sibling
+                WHERE sibling.collection_name = doc.collection_name AND sibling.doc_id <> doc.doc_id
+            )`, ['config', 'current']);
+        const terminals = result.values?.[0]?.terminals;
+        return typeof terminals === 'string' ? { terminals: JSON.parse(terminals) } : null;
     }
 
     readFiscalStatusConfig(terminalId: string, deviceId: string): Promise<unknown> {
@@ -637,22 +745,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     getDocumentsByIds<T>(collectionName: string, ids: readonly string[]): Promise<T[]> {
+        const reader = captureCheckoutDocumentReader('getDocumentsByIds');
         return this.withWriteLock(async () => {
             if (!ids.length) return [];
             if (ids.length > 100) throw new Error('DOCUMENT_BATCH_READ_LIMIT');
             const result = await this.ensureDb().query(
                 `SELECT data FROM documents WHERE collection_name = ? AND doc_id IN (${ids.map(() => '?').join(',')})`,
-                [collectionName, ...ids],
+                attributeCheckoutDocumentRead([collectionName, ...ids], reader),
             );
             return (result.values || []).map(row => JSON.parse(String(row.data)) as T);
         });
     }
 
-    private async getDocumentUnlocked<T>(collectionName: string, id: string): Promise<T | null> {
+    private async getDocumentUnlocked<T>(collectionName: string, id: string, reader?: string): Promise<T | null> {
         const db = this.ensureDb();
         const result = await db.query(
             'SELECT data FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1',
-            [collectionName, id]
+            attributeCheckoutDocumentRead([collectionName, id], reader)
         );
         const row = Array.isArray(result?.values) ? result.values[0] : null;
         const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
@@ -875,8 +984,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonDispatchPrecharge(this.ensureDb() as any,checkoutId),true));
     }
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_PLAN_START');
         if(input.dispatchCommit)input=snapshotDispatchFinancialPlan(input);
         const dispatchIntent=input.dispatchCommit?await dispatchFinancialIntentDigest(input):null;
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_DIGEST_DONE');
         let sealedDispatchEvent=false;let sealedDispatchSource:Record<string,unknown>|null=null;let dispatchReplayed=false;
         const assertDispatchOutbox=async()=>{if(!sealedDispatchEvent)return;for(const event of [input.outboxEvent,...(input.additionalOutboxEvents||[])]){const row=(await this.ensureDb().query('SELECT * FROM sync_outbox_v2 WHERE event_id=?',[event.eventId])).values?.[0];
             if(!row||row.event_type!==event.eventType||row.aggregate_type!==event.aggregateType||row.aggregate_id!==event.aggregateId||Number(row.schema_version)!==event.schemaVersion||row.created_at!==event.createdAt||canonicalDispatchJSON(JSON.parse(row.payload_json))!==canonicalDispatchJSON(event.payload))throw Error('DISPATCH_OUTBOX_EVENT_CONFLICT');
@@ -909,6 +1020,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_DOCUMENT_JSON_DONE');
         const outboxEvents = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
         for (const event of outboxEvents) {
             statements.push({
@@ -940,12 +1052,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
+        recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_OUTBOX_JSON_DONE');
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(async()=>{
           const legacyTxs=input.documents.filter(row=>row.collectionName==='transactions'&&(row.document as any)?.fiscalIssuance&&!(row.document as any).fiscalAllocationAuthorizationId).map(row=>row.document as any);
+          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_LOCK_ACQUIRED');
           const fiscalStatements=(await Promise.all(legacyTxs.map(tx=>this.planLegacyFiscalCommit(tx)))).flat();
           await this.executeUnlocked([...statements,...fiscalStatements],async()=>{
+          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_CHECKS_START');
           const guardedPool=(await this.ensureDb().query("SELECT p.pool_id,p.state FROM pos_dispatch_pool_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND p.state IN('WAREHOUSE_DISPATCH','FROZEN')")).values?.[0];
           if(guardedPool&&input.documents.some(d=>d.collectionName==='transactions')&&!input.dispatchCommit)throw Error('DISPATCH_CANONICAL_POOL_REQUIRES_ESCROW_COMMIT');
           const dispatchSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1');
@@ -1013,8 +1128,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if(input.fiscalWorkflowCommits?.length!==1||new Set(input.documents.map(d=>JSON.stringify([d.collectionName,d.document.id]))).size!==input.documents.length||JSON.stringify(source.document)!==JSON.stringify(history.document))throw Error('OFFLINE_FISCAL_ATOMIC_SOURCE_REQUIRED');
               const tx=source.document as unknown as import('../../../types').Transaction;
               if(tx.documentType!=='REFUND'){
-                const seriesRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?",[tx.seriesId])).values?.[0]?.data;
-                const counterRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='globalSequenceCounter' AND doc_id='value'")).values?.[0]?.data;
+                const rows=await this.ensureDb().query(`SELECT
+                  (SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?) AS series_data,
+                  (SELECT data FROM documents WHERE collection_name='globalSequenceCounter' AND doc_id='value') AS counter_data`,[tx.seriesId]);
+                const seriesRaw=rows.values?.[0]?.series_data ?? undefined;
+                const counterRaw=rows.values?.[0]?.counter_data ?? undefined;
                 const numbers=planFinancialNumbers({seriesId:tx.seriesId,documentType:'TICKET',global:true},seriesRaw?JSON.parse(seriesRaw):undefined,counterRaw?JSON.parse(counterRaw):undefined);
                 const seriesMutation=input.documents.filter(d=>d.collectionName==='internalSequences'),counterMutation=input.documents.filter(d=>d.collectionName==='globalSequenceCounter');
                 if(!tx.seriesId||seriesMutation.length!==1||counterMutation.length!==1||JSON.stringify([tx.displayId,tx.seriesNumber,tx.globalSequence])!==JSON.stringify([numbers.result.displayId,numbers.result.seriesNumber,numbers.result.globalSequence])||JSON.stringify(seriesMutation[0].document)!==JSON.stringify(numbers.series)||seriesMutation[0].expectedDocument!==seriesRaw||JSON.stringify(counterMutation[0].document)!==JSON.stringify(numbers.counter)||(counterRaw?counterMutation[0].expectedDocument!==counterRaw:counterMutation[0].requireAbsent!==true))throw Error('OFFLINE_FISCAL_NUMBER_PLAN_CHANGED');
@@ -1022,7 +1140,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
+          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_CHECKS_DONE');
         },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit),assertDispatchOutbox);
+          recordCheckoutDiagnostic('CHECKOUT_COMMIT_NATIVE_INSERTS_COMMITTED');
           for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
         });
     }
@@ -1106,7 +1226,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 range.lastReportedNumber, range.progressPending ? 1 : 0, range.blockedReason ?? null,
                 range.terminalId ?? null,
             ],
-        })));
+        })), 'masterNumberRanges');
     }
 
     async commitNumberedMasterCreation(input: NumberedMasterCommitInput): Promise<NumberedMasterCommitResult> {
@@ -1250,7 +1370,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
                 await this.ensureDb().execute(sql);
             },
-            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement:s.statement,values:s.values || []}))),
+            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement:s.statement,values:s.values || []})),
+                undefined, false, undefined, 'articleFormats'),
             query: async <T>(sql:string,values:(string|number|null)[]) => (await this.ensureDb().query(sql,values)).values as T[] || [],
         };
         const port: FormatSQL = {
@@ -1553,7 +1674,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     }
 
-    private async readStoredDocuments(collectionName: string): Promise<any[]> {
+    private async readStoredDocuments(collectionName: string, reader?: string): Promise<any[]> {
         const db = this.ensureDb();
         const docs: any[] = [];
         let offset = 0;
@@ -1561,7 +1682,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         while (true) {
             const result = await db.query(
                 'SELECT doc_id, length(data) AS data_length, CASE WHEN length(data) <= ? THEN data ELSE NULL END AS data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?',
-                [MAX_DOCUMENT_JSON_BYTES, collectionName, DOCUMENT_READ_BATCH_SIZE, offset]
+                attributeCheckoutDocumentRead([MAX_DOCUMENT_JSON_BYTES, collectionName, DOCUMENT_READ_BATCH_SIZE, offset], reader)
             );
             const rows = Array.isArray(result?.values) ? result.values : [];
             if (rows.length === 0) break;
@@ -1575,7 +1696,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     for (let start = 1; start <= length; start += CONFIG_READ_CHUNK_SIZE) {
                         const chunk = await db.query(
                             'SELECT substr(data, ?, ?) AS data FROM documents WHERE collection_name = ? AND doc_id = ?',
-                            [start, CONFIG_READ_CHUNK_SIZE, collectionName, storedRow.doc_id]
+                            attributeCheckoutDocumentRead([start, CONFIG_READ_CHUNK_SIZE, collectionName, storedRow.doc_id], reader)
                         );
                         const text = chunk.values?.[0]?.data;
                         if (typeof text !== 'string') throw new Error('No se pudo leer la configuración SQLite completa.');
@@ -1635,7 +1756,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const statements = [
             ...this.collectionReplacementStatements(collectionName,rows.map(row=>row.docId),now),
             ...rows.map((row) => ({
-                statement: DOCUMENT_UPSERT_SQL,
+                statement: collectionName === 'config' && row.docId === 'current'
+                    ? CONFIG_REPLACE_UPSERT_SQL : DOCUMENT_UPSERT_SQL,
                 values: [
                     collectionName,
                     row.docId,
@@ -1648,7 +1770,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             })),
         ];
 
-        await this.executeSetOrRun(statements);
+        await this.executeSetOrRun(statements, collectionName === 'config' ? 'replaceConfig' : 'replaceDocuments');
     }
 
     private async upsertStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
@@ -1668,7 +1790,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ],
         }));
 
-        await this.executeSetOrRun(statements);
+        await this.executeSetOrRun(statements, collectionName === 'config' ? 'upsertConfig' : 'upsertDocuments');
     }
 
     private toDocumentRows(collectionName: string, docs: any[]): Array<{ docId: string; data: string }> {
@@ -1690,9 +1812,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return Array.from(rowsById.values());
     }
 
-    private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
+    private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>,
+        source: 'replaceConfig' | 'replaceDocuments' | 'upsertConfig' | 'upsertDocuments' | 'masterNumberRanges'): Promise<void> {
         if (!statements.length) return;
-        await this.withWriteLock(() => this.executeUnlocked(statements));
+        await this.withWriteLock(() => this.executeUnlocked(statements, undefined, false, undefined, source));
     }
 
     async isV3TicketClosed(id: string): Promise<boolean> {
@@ -1958,7 +2081,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
     }
 
-    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void|false>, nativeFinancial=false,postcondition?:()=>Promise<void>): Promise<void> {
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void|false>, nativeFinancial = false,
+        postcondition?: () => Promise<void>, source = 'other'): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
@@ -1968,7 +2092,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if(nativeFinancial){await this.withNativeTransaction(async()=>{const proceed=await precondition?.();if(proceed!==false)for(const entry of executable)await db.run(entry.statement,entry.values,false);await postcondition?.();});return;}
 
         if (!precondition && !postcondition && typeof (db as any).executeSet === 'function') {
-            await (db as any).executeSet(executable, true, 'no');
+            const result = await measureSettingsReturnQa(`sqlite.lane.executeSet.${source}.${executable.length}`,
+                () => db.executeSet(executable, true, 'no'));
+            if (source === 'replaceConfig' && result?.changes?.changes === 0) {
+                markSettingsReturnQa('sqlite.lane.replaceConfig.noChanges');
+            }
             return;
         }
 

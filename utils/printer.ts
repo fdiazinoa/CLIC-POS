@@ -2,13 +2,14 @@ import {verifyReturnSettlementPresentation,returnSettlementLines} from '../servi
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
-import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
+import { fiscalPrintTransaction, isVerifiedFiscalPrintDisplay, MSELLER_PRINT_WAIT_MS, requiresMSellerPrintSignature, resolveFiscalPrintReadiness, terminalUsesMSellerRealtimePrint, type FiscalPrintDisplay } from '../services/fiscal/FiscalPrintEvidence';
+import {decideFiscalReturnPrint} from '../services/fiscal/ReturnFiscalState';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
-import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
+import { notifyPrintFailure, PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement, TerminalConfig } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
@@ -23,6 +24,10 @@ import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
 import { receiptSaleOperator, receiptUsesRestaurantService } from './receiptSaleContext';
 import { formatReceiptVariant, receiptModifiersWithoutVariant } from './receiptVariant';
+import { getStoredErpSyncBinding } from './erpSyncLifecycle';
+import { resolveLocalDeviceId } from './deviceRevocation';
+import { waitForLargeMasterSyncV3BaselineMutation } from '../services/sync/LargeMasterSyncV3OperationGate';
+import { LargeMasterSyncV3Error } from '../services/sync/LargeMasterSyncV3Types';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -251,10 +256,19 @@ export const buildTicketTaxPresentationHtml = (
     return { fiscalSummary, itemTaxHtml, totalTaxHtml };
 };
 
-const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
-    const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
-    if(persisted)transaction=persisted;
-    const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+export interface PrintTicketOptions {
+    /** First print after a sale may wait for the ERP fiscal signature; history reprints keep the default. */
+    fiscalWaitMs?: number;
+    /** Invoked when the wait expires without signed evidence, before the generic ticket is printed. */
+    onFiscalPending?: () => void;
+}
+
+const readPrintTransaction = async (transaction: Transaction): Promise<Transaction> =>
+    await dbAdapter.getDocument<Transaction>('transactions', transaction.id)
+    || await dbAdapter.getDocument<Transaction>('transactionHistory', transaction.id)
+    || transaction;
+
+const printTicketInternal = async (transaction: Transaction, config: BusinessConfig, fiscalPrint?: FiscalPrintDisplay): Promise<boolean> => {
     const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
@@ -690,10 +704,10 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     }
 };
 
-export const printIntegratedPaymentArtifacts = async (
+const printIntegratedPaymentVouchers = async (
     transaction: Transaction,
     config: BusinessConfig
-): Promise<{ ticketPrinted: boolean; voucherCopiesPrinted: number; voucherCopiesFailed: string[] }> => {
+): Promise<{ voucherCopiesPrinted: number; voucherCopiesFailed: string[] }> => {
     const payments = (transaction.payments || []) as Array<Record<string, any>>;
     const gatewayPayments = payments.filter(payment =>
         payment?.gatewayProvider && (payment?.gatewayReceiptMerchant || payment?.gatewayReceiptClient)
@@ -739,16 +753,23 @@ export const printIntegratedPaymentArtifacts = async (
         }
     }
 
-    const ticketPrinted = await printTicket(transaction, config);
-    if (!ticketPrinted) {
-        voucherCopiesFailed.push('ticket');
-    }
+    return { voucherCopiesPrinted, voucherCopiesFailed };
+};
 
-    return {
+type IntegratedPrintResult = Awaited<ReturnType<typeof printIntegratedPaymentVouchers>> & { ticketPrinted: boolean };
+const pendingIntegratedPrints = new Map<string, Promise<IntegratedPrintResult>>();
+export const printIntegratedPaymentArtifacts = (transaction: Transaction, config: BusinessConfig): Promise<IntegratedPrintResult> => {
+    const existing = pendingIntegratedPrints.get(transaction.id);
+    if (existing) return existing;
+    const vouchers = printIntegratedPaymentVouchers(transaction, config);
+    const ticket = printTicket(transaction, config, vouchers);
+    const request = Promise.all([vouchers, ticket]).then(([result, ticketPrinted]) => ({
+        ...result,
         ticketPrinted,
-        voucherCopiesPrinted,
-        voucherCopiesFailed,
-    };
+        voucherCopiesFailed: ticketPrinted ? result.voucherCopiesFailed : [...result.voucherCopiesFailed, 'ticket'],
+    })).finally(() => pendingIntegratedPrints.delete(transaction.id));
+    pendingIntegratedPrints.set(transaction.id, request);
+    return request;
 };
 
 const printReservationInternal = async (
@@ -1310,18 +1331,61 @@ export const printCouponForTransaction = async (transaction: Transaction, config
         return false;
     }
 };
-export const printTicket = async (...args: Parameters<typeof printTicketInternal>) => {
-    const transaction = args[0];
-    await verifyReturnSettlementPresentation(transaction);
-    const accepted = await trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
-        ()=>runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args)));
-    if (accepted && args[1].receiptConfig?.printCouponSlip) {
-        // Optional issuance starts after invoice/checkout tracking has finished.
-        // Its failure must never report the already accepted invoice as failed.
-        try { await printCouponForTransaction(transaction, args[1], false); }
-        catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
-    }
-    return accepted;
+const pendingTickets = new Map<string, Promise<boolean>>();
+export const printTicket = (requested: Transaction, config: BusinessConfig, vouchers?: Promise<unknown>, options: PrintTicketOptions = {}): Promise<boolean> => {
+    const existing = pendingTickets.get(requested.id);
+    if (existing) return existing;
+    const request = trackCheckoutPrint({transactionId:requested.id,displayId:requested.displayId,items:requested.items,total:requested.total,reason:'TICKET'}, async () => {
+        const transaction = await readPrintTransaction(requested);
+        await verifyReturnSettlementPresentation(transaction);
+        await vouchers;
+        const waitForSignature = requiresMSellerPrintSignature(transaction);
+        const usesHint = () => typeof localStorage !== 'undefined'
+            && config.terminals?.some(terminal => terminal.config.msellerRealtimePrintEnabled === true)
+            && terminalUsesMSellerRealtimePrint(transaction, config.terminals, getStoredErpSyncBinding(), resolveLocalDeviceId());
+        const useRealtimeHint = Boolean(usesHint());
+        if (useRealtimeHint) performance.mark(`clic-qa:fiscal-print-hint-enabled:${transaction.ncf}`);
+        const controller = useRealtimeHint ? new AbortController() : undefined;
+        const timer = controller ? setTimeout(() => controller.abort(), MSELLER_PRINT_WAIT_MS) : undefined;
+        try {
+            performance.mark(`clic-qa:fiscal-print-start:${transaction.ncf}`);
+            const fiscalPrint = await resolveFiscalPrintReadiness(transaction, {
+                waitForSignature, useRealtimeHint, timeoutMs: useRealtimeHint ? undefined : options.fiscalWaitMs, signal: controller?.signal,
+            });
+            performance.mark(`clic-qa:fiscal-print-${fiscalPrint ? fiscalPrint.dgiiAccepted ? 'signed-accepted' : 'signed-pending' : 'unavailable'}:${transaction.ncf}`);
+            if (waitForSignature && !isVerifiedFiscalPrintDisplay(fiscalPrint)) throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED');
+            const returnPrint = decideFiscalReturnPrint(transaction, isVerifiedFiscalPrintDisplay(fiscalPrint));
+            if (!returnPrint.allowed) throw new PrintOutputError(returnPrint.code || 'FISCAL_RETURN_SIGNED_QR_REQUIRED');
+            if (!fiscalPrint) options.onFiscalPending?.();
+            // The printer timeout and V3 print lock apply only after the fiscal evidence is ready.
+            while (!controller || (!controller.signal.aborted && usesHint())) {
+                try {
+                    return runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(transaction, config, fiscalPrint));
+                } catch (error) {
+                    if (!waitForSignature || !(error instanceof LargeMasterSyncV3Error) || error.code !== 'SYNC_V3_OPERATIONAL_WINDOW_HELD') throw error;
+                    try {
+                        await waitForLargeMasterSyncV3BaselineMutation(controller?.signal);
+                    } catch (waitError) {
+                        if (!controller?.signal.aborted) throw waitError;
+                    }
+                }
+            }
+            throw new PrintOutputError(controller?.signal.aborted ? 'MSELLER_PRINT_WINDOW_EXPIRED' : 'MSELLER_SIGNATURE_REQUIRED');
+        } finally {
+            clearTimeout(timer);
+        }
+    }).then(async accepted => {
+        if (accepted && config.receiptConfig?.printCouponSlip) {
+            try { await printCouponForTransaction(requested, config, false); }
+            catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
+        }
+        return accepted;
+    }).catch(error => {
+        notifyPrintFailure('Ticket', error);
+        return false;
+    }).finally(() => pendingTickets.delete(requested.id));
+    pendingTickets.set(requested.id, request);
+    return request;
 };
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));

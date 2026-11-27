@@ -8,6 +8,9 @@ export type TerminalReauthorizationResult = {
   message: string;
   authStatus?: string | null;
   expiresAt?: string | null;
+  /** Reauthorization was deliberately skipped because offline sales are still pending push. */
+  deferred?: boolean;
+  pendingPushEvents?: number;
 };
 
 const EXPIRY_SKEW_MS = 10 * 60_000;
@@ -24,12 +27,19 @@ export const reconcileStaleFiscalCheckout = async (): Promise<string> => {
     if (!dbAdapter.fiscalWorkflowStore) return '';
     const { readOfflineFiscalLocalAuthority } = await import('../fiscal/OfflineFiscalLeaseContext');
     const { fiscalWorkflowV2Client } = await import('../fiscal/FiscalWorkflowV2Client');
+    const store = dbAdapter.fiscalWorkflowStore;
     const info = await fiscalWorkflowV2Client.pendingCheckoutInfo();
     if (!info) return '';
     const local = await readOfflineFiscalLocalAuthority().catch(() => null);
     // A checkout that still matches the local authority is handled by the checkout flow itself,
-    // where the current cart proves whether it can be resumed.
-    if (local && info.offlineBindingHash === local.bindingHash) return '';
+    // where the current cart proves whether it can be resumed. Legacy hashes (older builds mixed the
+    // rotating device token) are compatible when the local reserve proves the same fiscal identity.
+    if (local) {
+      const compatible = info.offlineBindingHash === local.bindingHash
+        || Boolean(info.offlineBindingHash && store?.offlineBindingCompatible
+          && await store.offlineBindingCompatible(info.offlineBindingHash, local).catch(() => false));
+      if (compatible) return '';
+    }
     const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({});
     return outcome.cancelled ? ` ${outcome.note}` : '';
   } catch { return ''; }
@@ -65,6 +75,27 @@ export const reauthorizeTerminal = async (
     return { ok: false, message: 'La terminal no tiene identidad local para reautorizar (deviceId/terminalId).' };
   }
   if (!options.reconcileFiscalSession) {
+    // Registers change the ERP terminal projection, which revokes the offline lease backing any sale that
+    // has not reached the ERP yet. Prioritize the pending offline outbox: renew only the session, drain it,
+    // and if it cannot be drained do NOT rotate authority. That keeps confirmed sales pushable and turns an
+    // eventual deadlock into an explicit, retryable message instead of an infinite retry loop.
+    try {
+      const { countPendingOfflineFiscalPush, drainPendingOfflineFiscalPush } = await import('./OfflineFiscalPushDrain');
+      let pendingPush = await countPendingOfflineFiscalPush();
+      if (pendingPush > 0) {
+        await renewTerminalSession().catch(() => undefined);
+        const drain = await drainPendingOfflineFiscalPush();
+        pendingPush = drain.pending;
+        if (!drain.drained) {
+          return {
+            ok: false,
+            deferred: true,
+            pendingPushEvents: pendingPush,
+            message: `No se reautorizó: ${pendingPush} evento(s) de ventas offline siguen pendientes de empujar al ERP. Se prioriza el outbox y NO se rota la autoridad fiscal para no revocar la reserva que respalda esas ventas; reintenta en cuanto el outbox drene.`,
+          };
+        }
+      }
+    } catch { /* The guard is best effort; never block reauthorization on an unsupported adapter. */ }
     try {
       const payload = await registerErpSyncTerminal({
         deviceId,

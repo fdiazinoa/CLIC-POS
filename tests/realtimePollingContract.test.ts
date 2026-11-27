@@ -47,10 +47,15 @@ test('changing currentView does not recreate the ERP lifecycle timers', () => {
   const lifecycleEffectStart = appSource.lastIndexOf('useEffect(() => {', appSource.indexOf('const setupPending = hasPendingTerminalSetup'));
   const lifecycleEffectEnd = appSource.indexOf('// --- RECONNECTION BANNER ---', lifecycleEffectStart);
   const lifecycleEffect = appSource.slice(lifecycleEffectStart, lifecycleEffectEnd);
+  // The effect owns the STARTUP/heartbeat/config timers, so it must not depend
+  // on the unstable `getCurrentTerminal` callback (recreated by every
+  // `configUpdated` snapshot) nor on `currentView`: only a real binding change
+  // may restart the timers.
   assert.match(
     lifecycleEffect,
-    /\}, \[erpLifecycleReady, deviceId, getCurrentTerminal, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock\]\);/,
+    /\}, \[erpLifecycleReady, deviceId, erpBindingIdentityKey, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock\]\);/,
   );
+  assert.doesNotMatch(lifecycleEffect, /\[[^\]]*getCurrentTerminal[^\]]*\]/);
   assert.doesNotMatch(lifecycleEffect, /\[[^\]]*currentView[^\]]*\]/);
 });
 

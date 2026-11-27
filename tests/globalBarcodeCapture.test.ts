@@ -305,7 +305,7 @@ test('POS marks manual inputs and quiet receiver, blocks modal capture and prese
     assert.match(wrapper, /performBarcode\(\.\.\.args\)/);
     assert.match(process, /setSearchTerm\(''\)/);
     assert.ok(process.indexOf("setSearchTerm('')") < process.indexOf('routeScannedCoupon(trimmed)'));
-    assert.match(process, /setErrorToast\('Código no encontrado'\)/);
+    assert.match(process, /finish\('not-found', 'Código no encontrado'\)/);
     assert.match(process, /isReturnMode \? -1 : 1/);
 });
 

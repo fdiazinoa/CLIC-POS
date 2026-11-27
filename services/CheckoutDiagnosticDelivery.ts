@@ -3,17 +3,23 @@ import type { CheckoutDiagnosticRecord, TrackingSession } from './CheckoutDiagno
 const stages: Record<string, string> = {
     TRACKING_ENABLED: 'CART_CHANGED', TRACKING_DISABLED: 'CART_CHANGED',
     CHECKOUT_OPEN: 'CHECKOUT_OPENED', CHECKOUT_CONFIRM: 'CHECKOUT_OPENED',
+    CHECKOUT_RECEIPT_LOOKUP_DONE: 'CHECKOUT_OPENED', CHECKOUT_CONFIRMATION_START: 'CHECKOUT_OPENED',
+    CHECKOUT_PAYMENT_PREPARATION_START: 'CHECKOUT_OPENED', CHECKOUT_PAYMENT_PREPARATION_DONE: 'CHECKOUT_OPENED',
+    CHECKOUT_PAYMENT_EFFECT_START: 'CHECKOUT_OPENED', CHECKOUT_PAYMENT_EFFECT_DONE: 'CHECKOUT_OPENED',
     PAYMENT_MODAL_CONFIRM: 'CHECKOUT_OPENED', PAYMENT_RESULT: 'PAYMENT_CONFIRMED', PAYMENT_CLOSE: 'CART_CHANGED',
     CART_RENDER: 'CART_CHANGED', CART_CLEAR_REQUEST: 'CART_CLEARED', TABLE_CART_CLEAR: 'TABLE_HYDRATED', TABLE_CART_REPLACE: 'TABLE_HYDRATED',
     TRANSACTION_CREATE_INPUT: 'TRANSACTION_CREATED', TRANSACTION_CREATED: 'TRANSACTION_CREATED',
     LEGACY_PERSIST_OK: 'TRANSACTION_PERSISTED', FINANCIAL_COMMIT_START: 'OUTBOX_CREATED', FINANCIAL_COMMIT_OK: 'TRANSACTION_PERSISTED',
-    OUTBOX_BUILD: 'OUTBOX_CREATED', OUTBOX_SEND: 'OUTBOX_SEND_STARTED', OUTBOX_RESULT: 'OUTBOX_SEND_RESULT',
+    CHECKOUT_DOCUMENT_READS: 'OUTBOX_CREATED', OUTBOX_BUILD: 'OUTBOX_CREATED', OUTBOX_SEND: 'OUTBOX_SEND_STARTED', OUTBOX_RESULT: 'OUTBOX_SEND_RESULT',
     PRINT_DELIVERY_PLAN: 'PRINT_RESULT', PRINT_REQUEST: 'PRINT_REQUESTED', PRINT_RESULT: 'PRINT_RESULT',
 };
 const scalar = (v: unknown) => typeof v === 'string' ? v.slice(0,160) : typeof v === 'number' && Number.isFinite(v) ? v : null;
 const phaseLabels: Record<string,string> = {
     TRACKING_ENABLED:'Seguimiento activado', TRACKING_DISABLED:'Seguimiento desactivado',
     PAYMENT_MODAL_CONFIRM:'Confirmación solicitada en la pantalla de cobro', CHECKOUT_CONFIRM:'Confirmación recibida por el POS',
+    CHECKOUT_RECEIPT_LOOKUP_DONE:'Búsqueda de recibo previo terminada', CHECKOUT_CONFIRMATION_START:'Confirmación comercial iniciada',
+    CHECKOUT_PAYMENT_PREPARATION_START:'Preparación del pago iniciada', CHECKOUT_PAYMENT_PREPARATION_DONE:'Preparación del pago terminada',
+    CHECKOUT_PAYMENT_EFFECT_START:'Registro durable del intento de pago iniciado', CHECKOUT_PAYMENT_EFFECT_DONE:'Registro durable del intento de pago terminado',
     TRANSACTION_CREATE_INPUT:'Preparación de la transacción', TRANSACTION_CREATED:'Transacción construida',
     FINANCIAL_COMMIT_START:'Guardado de venta y evento iniciado', FINANCIAL_COMMIT_OK:'Transacción guardada', LEGACY_PERSIST_OK:'Transacción guardada',
     PAYMENT_RESULT:'Cobro finalizado', CART_CLEAR_REQUEST:'Limpieza de carrito solicitada',
@@ -30,7 +36,7 @@ export function diagnosticEvent(record: CheckoutDiagnosticRecord, sequence: numb
     const event = {
         record_id: record.id, local_sequence: sequence, occurred_at: record.at,
         message,
-        stage: stages[record.stage] || 'CART_CHANGED', severity: record.anomaly ? 'WARN' : 'INFO',
+        stage: stages[record.stage] || (record.stage.startsWith('CHECKOUT_COMMIT_') ? 'CHECKOUT_OPENED' : 'CART_CHANGED'), severity: record.anomaly ? 'WARN' : 'INFO',
         anomaly_code: record.anomaly ? 'POS_ITEMS_MISSING' : null,
         ticket_id: scalar(d.displayId), transaction_id: scalar(d.transactionId), event_id: scalar(d.eventId),
         table_id: scalar(d.tableId), order_id: scalar(d.orderId),
@@ -41,6 +47,7 @@ export function diagnosticEvent(record: CheckoutDiagnosticRecord, sequence: numb
         details: { operating_mode:record.capture?.mode ?? null, captured_apk_version:record.capture?.versionName ?? null, captured_apk_code:record.capture?.versionCode ?? null, phase:record.stage, total_recorded:hasTotal, items_recorded:d.itemCount != null, source_stage: record.stage.slice(0,100), checkout_id: record.checkoutId, reason: scalar(d.reason), status: scalar(d.status),
             aggregate_id: scalar(d.aggregateId), lines_truncated: Boolean(d.linesTruncated) || Number(d.itemCount) > 50,
             payments: (Array.isArray(d.payments) ? d.payments.slice(0,20) : []).map(p => ({ id: scalar(p.id), method: scalar(p.method), amount: scalar(p.amount), applied: scalar(p.applied), change: scalar(p.change) })),
+            ...(record.stage === 'CHECKOUT_DOCUMENT_READS' && d.documentReads ? { document_reads: d.documentReads } : {}),
             ...(d.performance && typeof d.performance === 'object' ? { performance: d.performance } : {}),
             ...(record.stage === 'TRACKING_ENABLED' && d.environment && typeof d.environment === 'object' ? { environment: d.environment } : {}),
         },

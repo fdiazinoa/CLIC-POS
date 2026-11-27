@@ -1,4 +1,4 @@
-import React, { CSSProperties, useEffect, useRef, useState } from 'react';
+import React, { CSSProperties, useEffect, useRef } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
 import { createSupermarketLineInteraction } from '../utils/supermarketLineInteraction';
@@ -24,7 +24,6 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     onRemoveItem,
     containerStyle
 }) => {
-    const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const onEditItemRef = useRef(onEditItem);
     onEditItemRef.current = onEditItem;
@@ -35,16 +34,8 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     const lineInteraction = lineInteractionRef.current;
 
     useEffect(() => {
-        if (lastAddedCartId) {
-            setHighlightedId(lastAddedCartId);
-            // Auto-scroll to top for new items (assuming prepend logic)
-            if (containerRef.current) {
-                containerRef.current.scrollTop = 0;
-            }
-            const timer = setTimeout(() => {
-                setHighlightedId(null);
-            }, 1500); // Extended visual pulse
-            return () => clearTimeout(timer);
+        if (lastAddedCartId && containerRef.current?.scrollTop) {
+            containerRef.current.scrollTop = 0;
         }
     }, [lastAddedCartId]);
 
@@ -67,7 +58,6 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-50">
                     {cart.map((item) => {
-                        const isHighlighted = highlightedId === item.cartId;
                         const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
                         const total = item.price * item.quantity;
                         const hasDiscount = item.adjustmentSource !== 'MANUAL_PRICE_OVERRIDE' && item.originalPrice && item.price < item.originalPrice;
@@ -87,8 +77,8 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     preventDefault: () => event.preventDefault(),
                                 })}
                                 className={`
-                                    group cursor-pointer transition-colors duration-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
-                                    ${isHighlighted ? 'bg-blue-50/80 animate-pulse' : 'hover:bg-gray-50'}
+                                    group cursor-pointer transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
+                                    hover:bg-gray-50
                                     ${isReturn ? 'bg-red-50/30' : ''}
                                 `}
                             >

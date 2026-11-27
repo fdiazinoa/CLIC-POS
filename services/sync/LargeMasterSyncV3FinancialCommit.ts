@@ -1,3 +1,5 @@
+import type { FiscalWorkflowCheckoutV2 } from '../fiscal/FiscalWorkflowV2Types';
+import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import {assertAtomicLegacySaleNumbering,hasAtomicLegacySaleNumbering,withoutAtomicSaleNumbers} from '../fiscal/AtomicLegacySaleNumbering';
 import {returnContract,returnNeed,type ReturnAttempt} from '../fiscal/FiscalReturnV1';
 import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
@@ -156,8 +158,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   }
   try{for(const {transaction,options} of entries){assertAtomicLegacySaleNumbering(transaction);if(hasAtomicLegacySaleNumbering(transaction)&&(entries.length!==1||options?.refund))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');}}catch(error){return Promise.reject(error);}
+  recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CANONICALIZE_START');
   const identities = entries.map(({transaction,options={}})=>allocationDraftIdentity(transaction,warehouseId,options));
   const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities,entries.map(({transaction})=>transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction)?[transaction.globalSequence,transaction.displayId,transaction.seriesNumber]:null)]);
+  recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CANONICALIZE_DONE');
   const pending = entries.map(entry => commits.get(entry.transaction.id)).find(Boolean);
   if (pending) return pending.identity === identity ? pending.promise
     : Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
@@ -179,6 +183,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }
     const saleConfig = entries.some(entry => !entry.options?.refund) ? await session.projectConfig(config) : undefined;
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_CONTEXT_READY');
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
@@ -230,18 +235,26 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if(hasAtomicLegacySaleNumbering(transaction)){
       if(retained||options.refund||['globalSequence','displayId','seriesNumber'].some(key=>(transaction as any)[key]!==undefined))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');
-      const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
+      const [series,counter]=await Promise.all([
+        db.getDocument('internalSequences',transaction.seriesId!) as Promise<any>,
+        db.getDocument('globalSequenceCounter' as any,'value') as Promise<any>,
+      ]);
       const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
       transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
       documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},
         {collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
     }
+    let allocationCheckout: FiscalWorkflowCheckoutV2 | null = null;
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
       fiscalAllocationPreconditions.push(...await dbAdapter.fiscalWorkflowStore.allocationCommitPreconditions(checkout));
+      allocationCheckout=checkout;
       if(!options.refund){
-        const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
+        const [series,counter]=await Promise.all([
+          db.getDocument('internalSequences',transaction.seriesId!) as Promise<any>,
+          db.getDocument('globalSequenceCounter' as any,'value') as Promise<any>,
+        ]);
         const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
         transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
         documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
@@ -264,6 +277,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({collectionName:'internalSequences',document:issuance.series!,expectedDocument:JSON.stringify(series)},
         {collectionName:'globalSequenceCounter',document:issuance.counter!,...(counter ? {expectedDocument:JSON.stringify(counter)} : {requireAbsent:true})});
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_NUMBERING_DONE');
     if(!dispatch){validateV3FrozenFiscalAmounts(transaction, retained);validateV3FrozenLineFiscalAmounts(transaction, projected);}
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
     const ledger = dispatch ? [] : await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
@@ -341,6 +355,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_PLAN_DOCUMENTS_READY');
     if (returnAttempt||dispatch||isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
       if (options.refund) {
         const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
@@ -348,7 +363,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
         if(document.fiscalWorkflowCheckoutId){
           if(!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
-          const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
+          const checkout=allocationCheckout ?? await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
           if(!checkout||checkout.transactionId!==document.id||!checkout.allocation)throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
           fiscalWorkflowBirth={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:checkout.allocation.authorizationId,authorityHash:checkout.allocation.authorityHash,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId};
           fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth});
@@ -371,7 +386,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
       if(document.fiscalWorkflowCheckoutId){
         if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
-        const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
+        const checkout=allocationCheckout ?? await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
         if(!checkout||checkout.transactionId!==document.id||offlineTable&&(!(checkout.permit?.leaseId||checkout.allocation)||JSON.stringify(checkout.fiscalSaleContext)!==JSON.stringify(document.fiscalSaleContext)))throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
         if(checkout.allocation)fiscalWorkflowBirth={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:checkout.allocation.authorizationId,authorityHash:checkout.allocation.authorityHash,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId};
         else if(checkout.permit)fiscalWorkflowBirth={schemaVersion:2,permitId:checkout.permit.permitId,transactionId:checkout.transactionId,nonce:checkout.permit.nonce,checkoutId:checkout.checkoutId};
@@ -382,6 +397,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       const claim = retained?.reservation ? JSON.parse(retained.expected) : undefined;
       // ADVANCE records a prior application in SALE_POSTED; PAYMENT_POSTED represents only newly received settlement.
       const newPayments = claim ? document.payments.filter(payment=>payment.method !== 'ADVANCE') : document.payments;
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_PAYLOAD_START');
       const paymentPosted = buildPaymentPostedPayload(claim ? {...document,payments:newPayments,
         settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { ...fiscalSourceMetadata, paymentIntentIds });
       events.push({ eventId: claim?.saleEventId || createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
@@ -392,6 +408,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       intentIds.push(...paymentIntentIds);
       }
     }
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_OUTBOX_PAYLOAD_DONE');
     results.push({ transaction: document, created: true });
     }
     for (const mutation of documents) {

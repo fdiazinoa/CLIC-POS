@@ -1208,6 +1208,13 @@ const createTerminalTemplate = (currentConfig: BusinessConfig, terminalId: strin
   }
 
   const nextTemplate = cloneDeep(template);
+  const boundTerminals = terminals.filter((terminal) =>
+    asString(terminal?.config?.erpBinding?.terminalId || terminal?.config?.erpTerminalId || terminal?.id) === (erpTerminalId || terminalId)
+  );
+  const printPreference = boundTerminals.length === 1 ? boundTerminals[0].config?.msellerRealtimePrintEnabled : undefined;
+  if (typeof printPreference === 'boolean') nextTemplate.msellerRealtimePrintEnabled = printPreference;
+  else delete nextTemplate.msellerRealtimePrintEnabled;
+
   if (!existing) {
     // A newly materialized ERP terminal must not inherit another box's policies
     // or order cursor. Keep the surrounding hardware/runtime template intact.

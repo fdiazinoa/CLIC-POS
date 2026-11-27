@@ -2,6 +2,8 @@ import { clicAlert } from '../dialog/ClicDialogService';
 import { setLargeMasterSyncV3CriticalOperation } from '../sync/LargeMasterSyncV3OperationGate';
 
 const failureMessages: Record<string, string> = {
+  MSELLER_SIGNATURE_REQUIRED: 'El timbre de MSeller todavía no está disponible. Cuando esté listo, reimprime el mismo comprobante desde el historial.',
+  MSELLER_PRINT_WINDOW_EXPIRED: 'El comprobante tiene timbre de MSeller. La caja sigue actualizando su configuración. Reimprime el mismo comprobante desde el historial.',
   BROWSER_UNAVAILABLE: 'Este documento utiliza el diálogo de impresión del navegador, que no está disponible en el APK. Ábrelo en la versión web para imprimirlo.',
   POPUP_BLOCKED: 'El navegador bloqueó la ventana de impresión. Permite las ventanas emergentes y vuelve a intentar.',
   PRINTER_NOT_FOUND: 'No se encontró una impresora. Configúrala en Ajustes > Hardware y comprueba que esté conectada.',

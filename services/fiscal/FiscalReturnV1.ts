@@ -155,6 +155,7 @@ export interface ReturnCapability {
 }
 export const sameReturn = (a: unknown, b: unknown) => returnJSON(a) === returnJSON(b);
 const uuid = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);
+const loyaltySnapshotOk = (s: any) => s?.loyaltyDisposition === 'NO_EFFECT_VERIFIED' || (s?.loyaltyDisposition === 'REVERSED' && uuid(s?.loyaltyReversal?.movementId) && Number.isInteger(s?.loyaltyReversal?.points) && s.loyaltyReversal.points > 0);
 /** The ERP creates the preparation before the POS receives it. Allow for the grant clock's sampling drift. */
 export function returnFiscalTime(preparation: ReturnPreparation, clockMs: number): number {
     const preparedAt = Date.parse(preparation.preparedAt);
@@ -215,7 +216,7 @@ export async function assertReturnPreparation(p: ReturnPreparation, a: ReturnAtt
     await assertReturnSnapshotDigest(p, a.preparationDigestProof);
     if (Object.hasOwn(s || {}, 'consumerFinalE32'))
         returnNeed(isConsumerFinalE32Return(p), 'FISCAL_RETURN_CONSUMER_FINAL_PROFILE_INVALID');
-    returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && s.loyaltyDisposition === 'NO_EFFECT_VERIFIED' && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference));
+    returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && loyaltySnapshotOk(s) && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference));
     returnNeed(Array.isArray(s.lines) && s.lines.length === c.lines.length && new Set(s.lines.map((l: any) => l.cartId)).size === s.lines.length && Array.isArray(s.paymentCommands) && (c.settlement ? c.payments.length===0 : s.paymentCommands.length === c.payments.length));
     for (const l of s.lines) {
         const requested = c.lines.find(x => x.cartId === l.cartId);
@@ -265,8 +266,13 @@ export function originalReferencePendingCode(reason: unknown): string {
 }
 export function returnOperatorMessage(error: unknown): string {
     const code = (error as Error)?.message || '';
+    // A deterministic ERP validation on one line is retryable; the cashier only needs the next step.
+    if (/LINE_TAX_ATTRIBUTION|TAX_ATTRIBUTION_REQUIRED/.test(code))
+        return 'No se pudo preparar la nota de crédito de esta línea. Reintenta la devolución; se conserva la misma operación y no se emitió ningún comprobante.';
     if (/FISCAL_RETURN_.*(?:SETTLEMENT|CUSTOMER|ADVANCE|WALLET|DEBT|CREDIT|PAYMENT_ATTRIBUTION|PAYMENT_EXCEEDED)/.test(code))
-        return `El ERP retuvo esta liquidación. Revisa el cliente, la deuda y la configuración de saldo; se conserva la misma operación. (${code})`;
+        return 'El ERP retuvo esta liquidación. Revisa el cliente, la deuda y la configuración de saldo; se conserva la misma operación.';
+    if ((error as Error)?.name === 'AbortError' || code === 'FISCAL_RETURN_REQUEST_TIMEOUT')
+        return 'El ERP no respondió a tiempo. La devolución conserva su operación para continuar desde el mismo intento.';
     if (code === 'FISCAL_RETURN_RECOVERY_REQUIRED')
         return 'Hay una reserva fiscal pendiente que requiere revisión antes de continuar. Se conserva la devolución.';
     if (code === 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE')
@@ -275,5 +281,11 @@ export function returnOperatorMessage(error: unknown): string {
         return 'Esta devolución necesita revisión del documento original. No se emitió otra nota de crédito.';
     if (/PAYMENT|BANK/.test(code))
         return 'El medio de reembolso requiere revisión. La devolución sigue pendiente.';
-    return 'Conecta la caja para preparar o confirmar esta devolución. Se conserva la misma operación pendiente; no se emitió otra nota de crédito.';
+    if (/CONSUMER_FINAL_FULL_CASH/.test(code))
+        return 'Esta factura es de cliente final (sin RNC): el ERP solo permite anularla completa. Para devolver una línea, la venta debe tener un cliente identificado con RNC.';
+    if (/AUTHORITY_REQUIRED|STORAGE_NOT_READY/.test(code))
+        return 'La reserva fiscal de la caja no está lista para esta devolución. Reintenta en unos segundos; no se emitió ningún comprobante.';
+    if (/TIMEOUT|UNAVAILABLE|NETWORK|HTTP_5/.test(code))
+        return 'El ERP no respondió a tiempo. Reintenta en unos segundos; se conserva la misma operación y no se emitió ningún comprobante.';
+    return 'No se pudo preparar la devolución. Reintenta; se conserva la misma operación y no se emitió ningún comprobante.';
 }

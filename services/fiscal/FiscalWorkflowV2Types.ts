@@ -31,7 +31,14 @@ export interface FiscalWorkflowStore {
  offlineLeasePermitCount?(leaseId:string,availableOnly?:boolean):Promise<number>;
  revokeAllocations?(scopeKey:string):Promise<void>;
  revokeOfflineLeases?(scopeKey:string):Promise<void>;
+ /** Legacy (pre-stable-identity) binding hashes are accepted only when a locally validated grant/reserve
+  * proves the same fiscal identity; the hash itself is no longer recomputable after token rotation. */
+ offlineBindingCompatible?(storedHash:unknown,authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority):Promise<boolean>;
+ /** Raw binding hashes of the newest non-revoked downloaded grants, for support diagnostics only. */
+ offlineReserveBindingHashes?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority):Promise<{lease:string|null;allocation:string|null}>;
  refillOperation(scopeKey:string):Promise<string>;
+ /** Rotates the persisted issuance operation for a scope (explicit ERP 409/lease rotation). */
+ rotateRefillOperation?(scopeKey:string):Promise<string>;
  savePermits(scopeKey:string,operationId:string,permits:FiscalWorkflowPermitV2[]):Promise<void>;
  reserveCheckout(scopeKey:string,cartIdentity:string,selection?:{operationKind:'RETURN'|'VOID';originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>},operationId?:string,options?:FiscalWorkflowReserveOptions):Promise<FiscalWorkflowCheckoutV2>;
  markPaymentPossible(checkoutId:string,paymentId:string):Promise<void>;

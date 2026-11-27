@@ -451,6 +451,29 @@ export const buildEscPosTicketPayload = (
   config: BusinessConfig,
   users: Array<{ id: string; name: string }> = [],
   fiscalPrint?: FiscalPrintDisplay,
+): string | null => formatEscPosTicket(transaction, config, users, fiscalPrint);
+
+export const buildSignedE32QaTicketPayload = (
+  transaction: Transaction,
+  config: BusinessConfig,
+  evidence: FiscalPrintDisplay,
+): string | null => {
+  if (import.meta.env.VITE_POS_FISCAL_LOCAL_PRINT_QA !== 'true'
+    || transaction.id !== 'SIGNED-E32-QA'
+    || transaction.ncf !== 'E320000000001'
+    || evidence.certifiedNcf !== transaction.ncf
+    || evidence.dgiiAccepted
+    || config.companyInfo.name !== 'PRUEBA QA'
+    || config.companyInfo.rnc !== '999999999') return null;
+  return formatEscPosTicket(transaction, config, [], undefined, evidence);
+};
+
+const formatEscPosTicket = (
+  transaction: Transaction,
+  config: BusinessConfig,
+  users: Array<{ id: string; name: string }> = [],
+  fiscalPrint?: FiscalPrintDisplay,
+  qaEvidence?: FiscalPrintDisplay,
 ): string | null => {
   if (!transaction?.items?.length) return null;
   const returnLines=returnSettlementLines(transaction);
@@ -673,12 +696,13 @@ export const buildEscPosTicketPayload = (
   }
 
   chunks.push(divider(width));
-  if(isVerifiedFiscalPrintDisplay(fiscalPrint)) {
+  const signedEvidence = isVerifiedFiscalPrintDisplay(fiscalPrint) ? fiscalPrint : qaEvidence;
+  if (signedEvidence) {
     chunks.push(align(1));pushTextLines(chunks,splitLines('COMPROBANTE ELECTRONICO FIRMADO',width));
-    pushTextLines(chunks,splitLines(fiscalPrint.certifiedNcf,width));pushQrCode(chunks,fiscalPrint.qrUrl);
-    pushTextLines(chunks,splitLines(`Codigo de seguridad: ${fiscalPrint.securityCode}`,width));
-    pushTextLines(chunks,splitLines(`Fecha firma: ${fiscalPrint.signedAt}`,width));
-    pushTextLines(chunks,splitLines(fiscalPrint.dgiiConditional?'DGII: Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
+    pushTextLines(chunks,splitLines(signedEvidence.certifiedNcf,width));pushQrCode(chunks,signedEvidence.qrUrl);
+    pushTextLines(chunks,splitLines(`Codigo de seguridad: ${signedEvidence.securityCode}`,width));
+    pushTextLines(chunks,splitLines(`Fecha firma: ${signedEvidence.signedAt}`,width));
+    pushTextLines(chunks,splitLines(signedEvidence.dgiiConditional?'DGII: Aceptado condicionalmente':signedEvidence.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
     chunks.push(align(0));chunks.push(divider(width));
   }
   const footerLines = (config.receiptConfig?.footerMessage || 'Gracias por su compra.\nVuelva pronto.')
