@@ -1,6 +1,10 @@
 import {fiscalWorkflowScopeKey,type FiscalWorkflowPermitV2} from '../fiscal/FiscalWorkflowV2Types';
-import {offlineFiscalFail,validateOfflineFiscalLease,validateOfflineFiscalPermit,type OfflineFiscalLease,type OfflineFiscalLocalAuthority} from '../fiscal/OfflineFiscalLease';
+import {recordCheckoutTrace} from '../audit/CheckoutTrace';
+import {offlineFiscalFail,validateOfflineFiscalLease,validateOfflineFiscalPermit,offlineFiscalRecordIdentityMatches,type OfflineFiscalLease,type OfflineFiscalLocalAuthority} from '../fiscal/OfflineFiscalLease';
 type Connection={run(sql:string,params?:any[],transaction?:boolean):Promise<any>;query(sql:string,params?:any[]):Promise<{values?:any[]}>};
+/** Support trace of a quarantined row, once per cause; reads must stay free of durable mutations. */
+let lastQuarantineTrace='';
+const traceQuarantine=(code:string)=>{if(lastQuarantineTrace===code)return;lastQuarantineTrace=code;try{recordCheckoutTrace('OFFLINE_RESERVE_QUARANTINED',`lease ${code}`);}catch{/* best effort */}};
 export const OFFLINE_FISCAL_LEASE_SCHEMA=`
 CREATE TABLE IF NOT EXISTS pos_offline_fiscal_leases_v1(lease_id TEXT PRIMARY KEY,scope_key TEXT NOT NULL,lease_json TEXT NOT NULL,binding_hash TEXT NOT NULL,server_offset_ms INTEGER NOT NULL,max_local_ms INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)));
 CREATE INDEX IF NOT EXISTS pos_offline_fiscal_lease_scope_v1 ON pos_offline_fiscal_leases_v1(scope_key,revoked);
@@ -23,7 +27,10 @@ export async function saveOfflineLeasePage(sql:Connection,lease:OfflineFiscalLea
  for(const previous of existingLeases)if(JSON.parse(previous.lease_json).bindingFingerprint!==lease.bindingFingerprint)
   await sql.run('UPDATE pos_offline_fiscal_leases_v1 SET revoked=1 WHERE lease_id=?',[previous.lease_id],false);
  const previous=(await sql.query('SELECT * FROM pos_offline_fiscal_leases_v1 WHERE lease_id=?',[lease.leaseId])).values?.[0];
- if(previous){if(previous.lease_json!==JSON.stringify(lease)||previous.binding_hash!==authority.bindingHash||previous.revoked||now<previous.max_local_ms)offlineFiscalFail('OFFLINE_FISCAL_LEASE_REVOKED');}
+ if(previous){if(previous.lease_json!==JSON.stringify(lease)||previous.revoked||now<previous.max_local_ms)offlineFiscalFail('OFFLINE_FISCAL_LEASE_REVOKED');
+   // A lease downloaded by an older build keeps a hash that mixed the rotating device token;
+   // the same fiscal identity is enough to keep it valid after an upgrade.
+   if(previous.binding_hash!==authority.bindingHash&&!offlineFiscalRecordIdentityMatches(authority,JSON.parse(previous.lease_json)))offlineFiscalFail('OFFLINE_FISCAL_LEASE_REVOKED');}
  else await sql.run('INSERT INTO pos_offline_fiscal_leases_v1(lease_id,scope_key,lease_json,binding_hash,server_offset_ms,max_local_ms)VALUES(?,?,?,?,?,?)',[lease.leaseId,key,JSON.stringify(lease),authority.bindingHash,serverMs-now,now],false);
  const count=Number((await sql.query("SELECT count(*) n FROM pos_fiscal_permits_v2 WHERE json_extract(permit_json,'$.leaseId')=?",[lease.leaseId])).values?.[0]?.n||0);
  const newIds=[];
@@ -33,20 +40,27 @@ export async function saveOfflineLeasePage(sql:Connection,lease:OfflineFiscalLea
  if(count+newIds.length>lease.saleCapacity)offlineFiscalFail('OFFLINE_FISCAL_CAPACITY_EXHAUSTED');
  for(const permit of newIds)await sql.run("INSERT INTO pos_fiscal_permits_v2(permit_id,transaction_id,scope_key,permit_json,expires_at,state)VALUES(?,?,?,?,?,'AVAILABLE')",[permit.permitId,permit.transactionId,key,JSON.stringify(permit),permit.expiresAt],false);
 }
-export async function readOfflineLease(sql:Connection,authority:OfflineFiscalLocalAuthority,leaseId?:string,advanceClock=true,allowExpired=false):Promise<OfflineFiscalLease|null>{
+/** Pure read: never revokes, never advances `max_local_ms`. A row whose fiscal identity differs from
+ * the current one is quarantined in memory (ignored here) and reported by `offlineLeaseReason`. */
+export async function readOfflineLease(sql:Connection,authority:OfflineFiscalLocalAuthority,leaseId?:string,allowExpired=false):Promise<OfflineFiscalLease|null>{
  const scopeKey=fiscalWorkflowScopeKey(authority.scope),now=Date.now();
  const rows=(await sql.query('SELECT * FROM pos_offline_fiscal_leases_v1 WHERE revoked=0 ORDER BY rowid DESC',[])).values||[];
  if(rows.some(row=>now<row.max_local_ms))offlineFiscalFail('OFFLINE_FISCAL_CLOCK_ROLLBACK');
  for(const row of rows){
-  if(row.scope_key!==scopeKey||row.binding_hash!==authority.bindingHash){await sql.run('UPDATE pos_offline_fiscal_leases_v1 SET revoked=1 WHERE lease_id=?',[row.lease_id],false);continue;}
+  if(row.scope_key!==scopeKey)continue;
+  let lease:OfflineFiscalLease;
+  try{lease=JSON.parse(row.lease_json) as OfflineFiscalLease;}catch{traceQuarantine('UNREADABLE_ROW');continue;}
+  if(!offlineFiscalRecordIdentityMatches(authority,lease)){traceQuarantine('AUTHORITY_CHANGED');continue;}
+  try{validateOfflineFiscalLease(lease,authority);}catch{traceQuarantine('OFFLINE_FISCAL_LEASE_INVALID');continue;}
   if(leaseId&&row.lease_id!==leaseId)continue;
-  const lease=JSON.parse(row.lease_json) as OfflineFiscalLease;validateOfflineFiscalLease(lease,authority);
-  if(now<row.max_local_ms)offlineFiscalFail('OFFLINE_FISCAL_CLOCK_ROLLBACK');
   if(!allowExpired&&now+row.server_offset_ms>=Date.parse(lease.validUntil))continue;
-  if(advanceClock)await sql.run('UPDATE pos_offline_fiscal_leases_v1 SET max_local_ms=? WHERE lease_id=?',[now,lease.leaseId],false);
   return lease;
  }
  return null;
+}
+/** Checkout/commit path only: proves the clock is monotonic when the reserve is actually consumed. */
+export async function advanceOfflineLeaseClock(sql:Connection,leaseId:string,at=Date.now()):Promise<void>{
+ await sql.run('UPDATE pos_offline_fiscal_leases_v1 SET max_local_ms=? WHERE lease_id=? AND revoked=0 AND max_local_ms<=?',[at,leaseId,at],false);
 }
 export async function offlineSaleDate(sql:Connection,leaseId:string):Promise<string>{
  const row=(await sql.query('SELECT server_offset_ms FROM pos_offline_fiscal_leases_v1 WHERE lease_id=? AND revoked=0',[leaseId])).values?.[0];

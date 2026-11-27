@@ -1,5 +1,7 @@
+import { beginPosInteraction } from '../utils/interactionPerformance';
 import test from 'node:test';
 import { build } from 'esbuild';
+import { nativeFixture, id } from './articleFormatsNativeFixture';
 import assert from 'node:assert/strict';
 import { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import type { LargeMasterSyncV3CandidateReady } from '../services/sync/LargeMasterSyncV3Candidate';
@@ -117,6 +119,19 @@ test('rejects a result if the independent inventory snapshot changes mid-read', 
   const changing = fixture({ advanceInventoryAfterBalance: true });
   const catalog = await LargeMasterSyncV3OperationalCatalog.open(changing.ready, 'T1', 'W');
   await assert.rejects(() => catalog.search('Agua'), /SYNC_V3_INVENTORY_NOT_READY/);
+});
+
+test('traced article lookup still rejects inventory drift after reading the article and warehouse data', async () => {
+  const { ready } = fixture({ advanceInventoryAfterBalance: true });
+  const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
+  const trace = beginPosInteraction('ADD_TICKET_ITEM');
+  await assert.rejects(() => catalog.get('A', trace), /SYNC_V3_INVENTORY_NOT_READY/);
+  assert.deepEqual(Object.keys(trace.stages).filter(stage => stage.startsWith('ADD_CATALOG')), [
+    'ADD_CATALOG_SNAPSHOT_BEFORE_START', 'ADD_CATALOG_SNAPSHOT_BEFORE_END',
+    'ADD_CATALOG_SALE_START', 'ADD_CATALOG_SALE_END',
+    'ADD_CATALOG_SUPPORT_START', 'ADD_CATALOG_SUPPORT_END',
+    'ADD_CATALOG_SNAPSHOT_AFTER_START', 'ADD_CATALOG_SNAPSHOT_AFTER_END',
+  ]);
 });
 
 test('authoritative image references survive get/search/page and reject inline media without legacy reads', async () => {
@@ -322,4 +337,25 @@ test('stock-controlled kilogram source preserves fractional demand and rejects c
   assert.doesNotThrow(()=>validateV3PinnedLineSource(line,item.product,item.authority));
   assert.throws(()=>validateV3PinnedLineSource({...line,operationalFlags:{...line.operationalFlags,trackInventory:false}},item.product,item.authority),/ARTICLE_SOURCE_CHANGED/);
  }
+});
+
+
+test('native single-article support uses one read and preserves variant order and inventory authority', async () => {
+  const f = await nativeFixture();
+  try {
+    const store = f.adapter.masterSyncV3Store;
+    const runtime = { syncId: id(60), syncVersion: 32, contractVersion: 2 as const };
+    const insert = f.db.prepare('INSERT INTO master_v3_variants(sync_version,article_id,variant_id,active,record_json) VALUES(32,?,?,?,?)');
+    for (const [variant, active] of [['B', 1], ['A', 1], ['C', 0]] as const) {
+      insert.run(id(7), variant, active, JSON.stringify({ id: variant, active: Boolean(active) }));
+    }
+    const reads = f.fault.queries;
+    const support = await store.getOperationalSupports(runtime, [id(7), 'missing'], id(5), true);
+    assert.equal(f.fault.queries - reads, 1);
+    assert.deepEqual(support.balances, { [id(7)]: { qtyOnHand: 137, qtyReserved: 0, qtyCommitted: 0 } });
+    assert.deepEqual(support.variants[id(7)].map(row => row.id), ['A', 'B']);
+    assert.equal(support.balances.missing, undefined);
+    f.db.prepare('DELETE FROM master_v3_inventory_state').run();
+    await assert.rejects(store.getOperationalSupports(runtime, [id(7)], id(5), true), /SYNC_V3_INVENTORY_NOT_READY/);
+  } finally { f.db.close(); }
 });

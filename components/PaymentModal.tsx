@@ -1092,9 +1092,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
    const handleFinalize = async () => {
       if (finalizationSubmissionRef.current || isFinalizing || isProcessingGateway || isSuccessScreen) return;
       finalizationSubmissionRef.current=true;
-      const commercialIdentity=(context:any)=>JSON.stringify({...context,items:context.items?.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line)});
+      // Identity of the commercial terms only. Config/roles/methods/integrations and UI flags
+      // legitimately change during a background sync; including them aborted a valid checkout
+      // with PAYMENT_CONFIRM_CONTEXT_CHANGED and forced a second full validation.
+      const commercialIdentity=(context:any)=>JSON.stringify({
+         items:context.items?.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),
+         payments:(context.payments||[]).map(({id,methodId,method,amount,currency}:any)=>({id,methodId,method,amount,currency})),
+         total:context.total,voluntaryTip:context.voluntaryTip,customerId:context.customerId,currency:context.currency,
+      });
       const operationTags=(context:any)=>(context.items||[]).map((line:any)=>line.fiscalCheckoutOperationId??null);
-      const identity=commercialIdentity(finalizationContextRef.current),originalTags=JSON.stringify(operationTags(finalizationContextRef.current));
+      let identity=commercialIdentity(finalizationContextRef.current),originalTags=JSON.stringify(operationTags(finalizationContextRef.current));
       const assertContext=(fence?:PaymentEffectsFence)=>{
          const current=finalizationContextRef.current;
          if(!finalizationMountedRef.current||commercialIdentity(current)!==identity)throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');
@@ -1109,6 +1116,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
       if(recoverCommittedReceipt){
          const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));
+         recordCheckoutDiagnostic('CHECKOUT_RECEIPT_LOOKUP_DONE');
          if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}
          assertContext();
       }
@@ -1132,8 +1140,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
       markInteractionStateUpdate(trace, 3);
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
+         recordCheckoutDiagnostic('CHECKOUT_PAYMENT_PREPARATION_START');
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])],voluntaryTip);
-         workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
+         recordCheckoutDiagnostic('CHECKOUT_PAYMENT_PREPARATION_DONE');
+         workflowPaymentFenceRef.current=releasePaymentFence||null;
+         // The fiscal checkout reservation legitimately assigns the operation tag to the items.
+         // Adopt the prepared state as the baseline; the guard still rejects later changes.
+         identity=commercialIdentity(finalizationContextRef.current);
+         originalTags=JSON.stringify(operationTags(finalizationContextRef.current));
+         assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
          const recoveringPayment=Boolean(releasePaymentFence?.recoveryPayments);
          let paymentsToConfirm = completed?.payments || releasePaymentFence?.recoveryPayments || payments;
@@ -1253,8 +1268,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
             // construction/commit so retries retain the original checkout, tender IDs and effect date.
             // This marker never means that the sale or a receipt has already committed.
             if(!completed&&paymentsToConfirm.length>0){
+               recordCheckoutDiagnostic('CHECKOUT_PAYMENT_EFFECT_START');
                for(const payment of paymentsToConfirm)await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
+               recordCheckoutDiagnostic('CHECKOUT_PAYMENT_EFFECT_DONE');
             }
+            recordCheckoutDiagnostic('CHECKOUT_CONFIRMATION_START');
             const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
             recordCheckoutDiagnostic('PAYMENT_RESULT', { items: txn?.items, total: txn?.total, transactionId: txn?.id, displayId: txn?.displayId, status: txn ? 'RETURNED' : 'NO_TRANSACTION' });
 
@@ -1587,11 +1605,18 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                            if (!config || !completedTransaction || printTicketPending.current) return;
                            printTicketPending.current = true;
                            setIsPrintingTicket(true);
+                           setSuccessNotice('Generando comprobante fiscal firmado…');
+                           let fiscalPending = false;
                            try {
-                              const accepted = await printTicket(completedTransaction, config);
+                              const accepted = await printTicket(completedTransaction, config, undefined, {
+                                 fiscalWaitMs: 10000,
+                                 onFiscalPending: () => { fiscalPending = true; },
+                              });
                               setSuccessNotice(accepted
-                                 ? 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
-                                 : 'La venta está registrada. Revisa la impresora y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
+                                 ? fiscalPending
+                                    ? 'La venta está registrada. La firma de MSeller aún no está disponible: se imprimió una versión genérica una sola vez. Espera unos segundos y reimprime el ticket firmado desde el historial; no repitas el cobro.'
+                                    : 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
+                                 : 'La venta está registrada. Revisa el aviso y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
                               if (accepted && !canStartNewSale) onClose();
                            } finally {
                               printTicketPending.current = false;

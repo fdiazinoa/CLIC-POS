@@ -1,0 +1,34 @@
+<?xml version='1.0' encoding='utf-8'?>
+<ECF>
+  <Encabezado>
+    <Version>1.0</Version>
+    <IdDoc>
+      <TipoeCF>32</TipoeCF>
+      <eNCF>E320000000001</eNCF>
+      <TipoIngresos>01</TipoIngresos>
+      <TipoPago>1</TipoPago>
+    </IdDoc>
+    <Emisor>
+      <RNCEmisor>999999999</RNCEmisor>
+      <RazonSocialEmisor>EMISOR SINTETICO QA</RazonSocialEmisor>
+      <DireccionEmisor>Direccion ficticia QA</DireccionEmisor>
+      <FechaEmision>25-11-2026</FechaEmision>
+    </Emisor>
+    <Comprador><RazonSocialComprador>Consumidor Final</RazonSocialComprador></Comprador><Totales>
+      <MontoExento>192.00</MontoExento>
+      <MontoTotal>192.00</MontoTotal>
+    </Totales>
+  </Encabezado>
+  <DetallesItems>
+    <Item>
+      <NumeroLinea>1</NumeroLinea>
+      <IndicadorFacturacion>4</IndicadorFacturacion>
+      <NombreItem>Articulo sintetico QA</NombreItem>
+      <IndicadorBienoServicio>1</IndicadorBienoServicio>
+      <CantidadItem>1.00</CantidadItem>
+      <PrecioUnitarioItem>192.00</PrecioUnitarioItem>
+      <MontoItem>192.00</MontoItem>
+    </Item>
+  </DetallesItems>
+  <FechaHoraFirma>25-11-2026 10:00:00</FechaHoraFirma>
+</ECF>

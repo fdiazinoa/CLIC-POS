@@ -24,6 +24,7 @@ import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTran
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
 import { v3ErpStockDisplay, v3ErpStockDisplayScope } from './LargeMasterSyncV3ErpStockDisplay';
+import { publishV3SalesConfig } from './LargeMasterSyncV3ConfigPublication';
 import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
 import { v3BindingKey } from './LargeMasterSyncV3BindingKey';
 import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
@@ -110,6 +111,8 @@ import {
     shouldRunLegacyAutomaticMasterSweep,
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
+import { markSettingsReturnQa, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
+import { terminalConfigChangedSections } from '../../utils/terminalConfigPersistence';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 import { preserveLocalCatalog } from './preserveLocalCatalog';
 import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLocalCatalog';
@@ -1506,6 +1509,141 @@ class SyncManager {
         return `clic_pos_terminal_catalog_cursor:${localTerminalId}`;
     }
 
+    /**
+     * Loads the persisted local configuration only when it belongs to the
+     * effective binding of this device (local terminal + ERP terminal + tenant).
+     *
+     * The background manifest reconciliation can run without an in-memory base
+     * config (`syncTerminalManifestInBackground(undefined, …)`). Without the
+     * persisted snapshot, every catalog classification looked missing and the
+     * reconciliation forced `/terminals/:id/config` with empty `master_scopes`
+     * and `resolved_scopes=catalog` on every STARTUP. A snapshot from another
+     * scope is never reused: after a re-binding it must be recovered remotely.
+     */
+    private async loadPersistedConfigForActiveBinding(): Promise<BusinessConfig | null> {
+        let stored: unknown;
+        try {
+            stored = await db.get('config');
+        } catch (error) {
+            console.warn('[SYNC_ROUTER] Persisted config unavailable for manifest reconciliation; recovery fetch remains enabled.', error);
+            return null;
+        }
+
+        if (!stored || Array.isArray(stored) || typeof stored !== 'object') return null;
+        const persisted = stored as BusinessConfig;
+        if (!Array.isArray(persisted.terminals) || persisted.terminals.length === 0) return null;
+
+        const context = this.getActiveTerminalContext(persisted);
+        const boundTerminal = this.findBoundTerminalForContext(persisted, context);
+        if (!boundTerminal) return null;
+
+        // Scope guard: the persisted snapshot must describe the same tenant and
+        // the same ERP/local terminal that is currently bound to this device.
+        const persistedTenantId = String(
+            boundTerminal.config?.erpBinding?.tenantId
+            || boundTerminal.config?.erpSnapshot?.tenant_id
+            || persisted.metadata?.tenantId
+            || ''
+        ).trim();
+        const expectedTenantIds = new Set([
+            String(localStorage.getItem('clic_erp_sync_tenant_id') || '').trim(),
+            String(localStorage.getItem('active_tenant_id') || '').trim(),
+            String(localStorage.getItem('clic_tenant_id') || '').trim(),
+        ].filter(Boolean));
+        if (persistedTenantId && expectedTenantIds.size > 0 && !expectedTenantIds.has(persistedTenantId)) {
+            return null;
+        }
+
+        const persistedErpTerminalId = String(
+            boundTerminal.config?.erpBinding?.terminalId
+            || boundTerminal.config?.erpTerminalId
+            || ''
+        ).trim();
+        const expectedErpTerminalId = String(
+            normalizeCanonicalErpTerminalId(localStorage.getItem('clic_erp_sync_terminal_id')) || ''
+        ).trim();
+        if (persistedErpTerminalId && expectedErpTerminalId && persistedErpTerminalId !== expectedErpTerminalId) {
+            return null;
+        }
+
+        const expectedLocalTerminalId = String(
+            localStorage.getItem('active_terminal_id')
+            || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+            || ''
+        ).trim();
+        if (expectedLocalTerminalId) {
+            // `active_terminal_id` can hold either the local terminal id or the
+            // ERP terminal id (both are accepted by the runtime resolver).
+            const persistedTerminalIds = new Set([
+                String(boundTerminal.id || '').trim(),
+                String(boundTerminal.config?.stationNumber || '').trim(),
+                String(boundTerminal.config?.erpBinding?.stationNumber || '').trim(),
+                String(boundTerminal.config?.erpBinding?.terminalId || '').trim(),
+                String(boundTerminal.config?.erpTerminalId || '').trim(),
+                persistedErpTerminalId,
+            ].filter(Boolean));
+            if (!persistedTerminalIds.has(expectedLocalTerminalId)) return null;
+        }
+
+        return persisted;
+    }
+
+    private findBoundTerminalForContext(
+        config: BusinessConfig | null | undefined,
+        context: { terminalId: string | null; localTerminalId: string | null },
+    ): BusinessConfig['terminals'][number] | null {
+        const terminals = Array.isArray(config?.terminals) ? config!.terminals : [];
+        const erpTerminalId = String(context.terminalId || '').trim();
+        const localTerminalId = String(context.localTerminalId || '').trim();
+
+        for (const terminal of terminals) {
+            const terminalId = String(terminal?.id || '').trim();
+            const stationNumber = String(
+                terminal?.config?.stationNumber
+                || terminal?.config?.erpBinding?.stationNumber
+                || ''
+            ).trim();
+            const erpTerminalIds = [
+                String(terminal?.config?.erpBinding?.terminalId || '').trim(),
+                String(terminal?.config?.erpTerminalId || '').trim(),
+            ].filter(Boolean);
+
+            if (localTerminalId && (terminalId === localTerminalId || stationNumber === localTerminalId)) {
+                return terminal;
+            }
+            if (erpTerminalId && (erpTerminalIds.includes(erpTerminalId) || terminalId === erpTerminalId)) {
+                return terminal;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * True when the local snapshot already carries at least one persisted
+     * catalog classification. Classification levels are optional in the ERP
+     * contract (a tenant may legitimately have no sections, families or
+     * brands), so an empty level must not be treated as missing data on its
+     * own. `false` keeps the recovery path (config GET) available when SQLite
+     * is empty or nothing was ever synchronized.
+     */
+    private hasAnyPersistedCatalogClassification(
+        config: BusinessConfig | null,
+        context: { terminalId: string | null; localTerminalId: string | null },
+    ): boolean {
+        if (!config) return false;
+        const terminalConfig = this.findBoundTerminalForContext(config, context)?.config;
+        return [
+            config.productGroups,
+            terminalConfig?.catalog?.allowedCategories,
+            config.departments,
+            config.sections,
+            config.families,
+            config.subfamilies,
+            config.brands,
+        ].some((entries) => Array.isArray(entries) && entries.length > 0);
+    }
+
     private getTerminalManifestCursorStorageKey(localTerminalId: string): string {
         return `clic_pos_terminal_manifest_cursor_map:${localTerminalId}`;
     }
@@ -2456,7 +2594,19 @@ class SyncManager {
         }
 
         options?.assertV3Binding?.();
-        const context = this.getActiveTerminalContext(baseConfig);
+        // `syncTerminalManifestInBackground()` runs without the React state base
+        // config. Use the persisted snapshot of the same binding as the base for
+        // the classification pre-flight instead of treating `null` as "all the
+        // catalog classifications are missing", which forced a `/config` GET
+        // (empty master_scopes, resolved_scopes=catalog) on every STARTUP.
+        const providedBaseConfig = baseConfig
+            && !Array.isArray(baseConfig)
+            && Array.isArray(baseConfig.terminals)
+            && baseConfig.terminals.length > 0
+            ? baseConfig
+            : null;
+        const persistedBaseConfig = providedBaseConfig ?? await this.loadPersistedConfigForActiveBinding();
+        const context = this.getActiveTerminalContext(persistedBaseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
         if (!context.terminalId || !localTerminalId || !context.tenantId) {
             return null;
@@ -2470,19 +2620,18 @@ class SyncManager {
             return null;
         }
 
-        const currentTerminalConfig = context.localTerminalId || context.terminalId
-            ? baseConfig?.terminals?.find((terminal) =>
-                terminal.id === context.localTerminalId ||
-                terminal.id === context.terminalId ||
-                terminal.config?.erpTerminalId === context.terminalId ||
-                terminal.config?.erpBinding?.terminalId === context.terminalId
-            )?.config
-            : null;
-        const preflightProductGroups = Array.isArray(baseConfig?.productGroups)
-            ? baseConfig.productGroups
+        // If the in-memory base is partial but SQLite holds a complete snapshot
+        // of the same binding, prefer the persisted classifications. When both
+        // are empty the recovery path below still requests the config.
+        const classificationBaseConfig = this.hasAnyPersistedCatalogClassification(persistedBaseConfig, context)
+            ? persistedBaseConfig
+            : ((persistedBaseConfig ? await this.loadPersistedConfigForActiveBinding() : null) ?? persistedBaseConfig);
+        const classificationTerminalConfig = this.findBoundTerminalForContext(classificationBaseConfig, context)?.config ?? null;
+        const preflightProductGroups = Array.isArray(classificationBaseConfig?.productGroups)
+            ? classificationBaseConfig.productGroups
             : [];
-        const preflightTerminalAllowedCategories = Array.isArray(currentTerminalConfig?.catalog?.allowedCategories)
-            ? currentTerminalConfig.catalog.allowedCategories
+        const preflightTerminalAllowedCategories = Array.isArray(classificationTerminalConfig?.catalog?.allowedCategories)
+            ? classificationTerminalConfig.catalog.allowedCategories
             : [];
         const shouldBypassCompletedManifestSkipForCatalog = Boolean(
             apiSyncAdapter.isErpActiveOperationalTarget() &&
@@ -2631,8 +2780,8 @@ class SyncManager {
             const inventoryVersionMiss = Boolean(remoteInventoryVersion && localInventoryVersion && remoteInventoryVersion !== localInventoryVersion);
             const priceVersionMiss = Boolean(remotePriceVersion && localPriceVersion && remotePriceVersion !== localPriceVersion);
             const persistedInternalSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
-            const persistedTerminalSeries = Array.isArray(currentTerminalConfig?.documentSeries)
-                ? currentTerminalConfig.documentSeries
+            const persistedTerminalSeries = Array.isArray(classificationTerminalConfig?.documentSeries)
+                ? classificationTerminalConfig.documentSeries
                 : [];
             const hasErpTerminalConfigDocumentSeries = [...persistedInternalSequences, ...persistedTerminalSeries]
                 .some((series: any) => String(series?.source || '').toUpperCase() === 'ERP_TERMINAL_CONFIG');
@@ -2640,17 +2789,17 @@ class SyncManager {
                 apiSyncAdapter.isErpActiveOperationalTarget() &&
                 !hasErpTerminalConfigDocumentSeries
             );
-            const persistedProductGroups = Array.isArray(baseConfig?.productGroups)
-                ? baseConfig.productGroups
+            const persistedProductGroups = Array.isArray(classificationBaseConfig?.productGroups)
+                ? classificationBaseConfig.productGroups
                 : [];
-            const persistedTerminalAllowedCategories = Array.isArray(currentTerminalConfig?.catalog?.allowedCategories)
-                ? currentTerminalConfig.catalog.allowedCategories
+            const persistedTerminalAllowedCategories = Array.isArray(classificationTerminalConfig?.catalog?.allowedCategories)
+                ? classificationTerminalConfig.catalog.allowedCategories
                 : [];
-            const persistedDepartments = Array.isArray(baseConfig?.departments) ? baseConfig.departments : [];
-            const persistedSections = Array.isArray(baseConfig?.sections) ? baseConfig.sections : [];
-            const persistedFamilies = Array.isArray(baseConfig?.families) ? baseConfig.families : [];
-            const persistedSubfamilies = Array.isArray(baseConfig?.subfamilies) ? baseConfig.subfamilies : [];
-            const persistedBrands = Array.isArray(baseConfig?.brands) ? baseConfig.brands : [];
+            const persistedDepartments = Array.isArray(classificationBaseConfig?.departments) ? classificationBaseConfig.departments : [];
+            const persistedSections = Array.isArray(classificationBaseConfig?.sections) ? classificationBaseConfig.sections : [];
+            const persistedFamilies = Array.isArray(classificationBaseConfig?.families) ? classificationBaseConfig.families : [];
+            const persistedSubfamilies = Array.isArray(classificationBaseConfig?.subfamilies) ? classificationBaseConfig.subfamilies : [];
+            const persistedBrands = Array.isArray(classificationBaseConfig?.brands) ? classificationBaseConfig.brands : [];
             // Some classification levels are optional. Treating every empty list as
             // missing forced a full catalog config pull on every manifest cycle.
             const hasPersistedCatalogClassifications = [
@@ -3928,7 +4077,7 @@ class SyncManager {
                             JSON.stringify(this.sanitizeConfig(incomingConfig));
 
                         if (options?.persist !== false && changed) {
-                            await db.save('config', incomingConfig);
+                            await measureSettingsReturnQa('sync.config.terminalFallback.replace', () => db.save('config', incomingConfig));
                         }
 
                         if (options?.dispatchEvent !== false && changed) {
@@ -4068,43 +4217,57 @@ class SyncManager {
         });
 
         const localProducts = v3Authority ? [] : ((await db.get('products')) as Product[]) || [];
-        const nextConfig = v3Authority ? applied.config : this.reconcileCatalogProductIds(applied.config, localProducts);
+        const projectedConfig = v3Authority ? applied.config : this.reconcileCatalogProductIds(applied.config, localProducts);
         if (v3Authority) {
             // Terminal identity, documents and permissions still come from the
             // existing config contract, but its tariff/tax copies are not V3.
-            nextConfig.tariffs = configForTerminalSnapshot.tariffs;
-            nextConfig.taxes = configForTerminalSnapshot.taxes;
+            projectedConfig.tariffs = configForTerminalSnapshot.tariffs;
+            projectedConfig.taxes = configForTerminalSnapshot.taxes;
         }
+        const changedSections = terminalConfigChangedSections(
+            this.sanitizeConfig(configForTerminalSnapshot), this.sanitizeConfig(projectedConfig),
+        );
+        const changed = changedSections.length > 0;
+        // Reuse the stored representation for an equivalent refresh so runtime
+        // authority fingerprints and SQLite retain the same object key order.
+        const nextConfig = changed ? projectedConfig : configForTerminalSnapshot;
         const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
-        const changed =
-            JSON.stringify(this.sanitizeConfig(configForTerminalSnapshot)) !==
-            JSON.stringify(this.sanitizeConfig(nextConfig));
 
-        if (options?.persist !== false && changed) {
-            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
-            await db.save('config', nextConfig);
-        }
-
-        if (nextRuntimeWarehouses.length > 0) {
-            const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
-            const persistedJson = JSON.stringify(persistedWarehouses);
-            const nextJson = JSON.stringify(nextRuntimeWarehouses);
-
-            if (persistedJson !== nextJson) {
-                await db.save('warehouses', nextRuntimeWarehouses);
-                window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+        const persistResolvedAuthority = async () => {
+            if (options?.persist !== false && changed) {
+                if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+                for (const section of changedSections) markSettingsReturnQa(`sync.config.terminalResolved.changed.${section}`);
+                await measureSettingsReturnQa('sync.config.terminalResolved.replace', () => db.save('config', nextConfig));
+            } else if (!changed) {
+                markSettingsReturnQa('sync.config.terminalResolved.unchanged');
             }
+
+            if (nextRuntimeWarehouses.length > 0) {
+                const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
+                const persistedJson = JSON.stringify(persistedWarehouses);
+                const nextJson = JSON.stringify(nextRuntimeWarehouses);
+
+                if (persistedJson !== nextJson) {
+                    await db.save('warehouses', nextRuntimeWarehouses);
+                    window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+                }
+            }
+
+            await db.rehydrateOperationalDocumentState(
+                operationalDocumentState.documentSeries,
+                operationalDocumentState.fiscalRanges,
+                operationalDocumentState.fiscalAllocations,
+                operationalDocumentState.terminalId,
+            );
+
+            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+        };
+        if (v3Authority && changed && options?.persist !== false && options?.dispatchEvent !== false) {
+            await publishV3SalesConfig(applied.terminalId, configForTerminalSnapshot, nextConfig, persistResolvedAuthority);
+        } else {
+            await persistResolvedAuthority();
         }
-
-        await db.rehydrateOperationalDocumentState(
-            operationalDocumentState.documentSeries,
-            operationalDocumentState.fiscalRanges,
-            operationalDocumentState.fiscalAllocations,
-            operationalDocumentState.terminalId,
-        );
-
-        if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
 
         window.dispatchEvent(new CustomEvent('terminalFiscalDocumentsUpdated', {
             detail: { terminalId: operationalDocumentState.terminalId },
@@ -5617,18 +5780,33 @@ class SyncManager {
             const mergedPosCategories = posCategories.length > 0
                 ? mergePosCategoryPresentation(currentConfig.posCategories, posCategories)
                 : currentConfig.posCategories;
-            const nextConfig = {
-                ...currentConfig,
-                departments: departments.length > 0 ? departments : currentConfig.departments,
-                sections: sections.length > 0 ? sections : currentConfig.sections,
-                families: families.length > 0 ? families : currentConfig.families,
-                subfamilies: subfamilies.length > 0 ? subfamilies : currentConfig.subfamilies,
-                brands: brands.length > 0 ? brands : currentConfig.brands,
-                posCategories: mergedPosCategories,
+            const incomingClassifications = {
+                departments,
+                sections,
+                families,
+                subfamilies,
+                brands,
+                posCategories: posCategories.length > 0 ? mergedPosCategories : [],
             };
-            await db.save('config', nextConfig);
-            nextConfigWithClassifications = nextConfig;
-            changed = true;
+            const content = (row: Record<string, unknown>) => JSON.stringify(Object.fromEntries(
+                Object.keys(row).filter(key => key !== 'updatedAt').sort().map(key => [key, row[key]]),
+            ));
+            const updates = Object.fromEntries(Object.entries(incomingClassifications).filter(([key, rows]) => {
+                if (!rows.length) return false;
+                const current = currentConfig[key];
+                return !Array.isArray(current) || current.length !== rows.length || rows.some((row, index) => {
+                    const previous = current[index];
+                    return !previous || typeof previous !== 'object' || content(row) !== content(previous);
+                });
+            }));
+            if (Object.keys(updates).length > 0) {
+                const nextConfig = { ...currentConfig, ...updates };
+                await measureSettingsReturnQa('sync.config.classifications.replace', () => db.save('config', nextConfig));
+                nextConfigWithClassifications = nextConfig;
+                changed = true;
+            } else {
+                markSettingsReturnQa('sync.config.classifications.unchanged');
+            }
         }
 
         if (changed) {

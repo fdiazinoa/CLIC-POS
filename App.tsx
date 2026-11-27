@@ -1,9 +1,11 @@
 import { beginSettingsReturnQa } from './settingsReturnQaTrace';
+import { persistTerminalAssignmentRepair } from './services/identity/configRepairPersistence';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
 import { fiscalReceiptEmailQueue } from './services/email/fiscalReceiptEmailDelivery';
 import {createFiscalReturnConsumer,createFiscalReturnTransport} from './services/fiscal/FiscalReturnConsumer';
+import {markOriginalReturnPending} from './services/fiscal/ReturnFiscalState';
 import {returnOperatorMessage} from './services/fiscal/FiscalReturnV1';
 import {recoverCommittedRefundRetry} from './services/fiscal/RefundRetryRecovery';
 import {refundRetryIdentity,refundRetryScopeKey,withRefundProcessingLock} from './services/fiscal/RefundRetryIdentity';
@@ -15,6 +17,7 @@ import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
 import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {financialIdentity} from './services/db/LargeMasterSyncV3FinancialRetention';
 import { fiscalWorkflowV2Client,fiscalWorkflowMessage } from './services/fiscal/FiscalWorkflowV2Client';
+import { warmFiscalPrintEvidence } from './services/fiscal/FiscalPrintEvidenceWarmup';
 import { reserveRefundFiscalReservation } from './services/fiscal/RefundFiscalReservation';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
@@ -27,6 +30,7 @@ import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/loca
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
+import { V3_SALES_CONFIG_PUBLISHED } from './services/sync/LargeMasterSyncV3ConfigPublication';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
 import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation,readV3CommittedLegacySaleReplay } from './services/sync/LargeMasterSyncV3FinancialCommit';
@@ -343,6 +347,7 @@ import { printComanda, printIntegratedPaymentArtifacts, printPrecuenta, printTic
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { readRefundOriginal, persistStandaloneRefundTransaction } from './services/localRefundPersistence';
+import { prepareCommittedFiscalPrint } from './services/fiscal/FiscalPrintEvidence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import {
   buildMasterUrlCandidates,
@@ -351,6 +356,7 @@ import {
   publishMasterEndpointToCloud,
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
+import { resolveErpBindingIdentity } from './utils/erpBindingIdentity';
 import { discoverLanMasterCandidates } from './utils/masterLanDiscovery';
 import {
   clearStoredErpSyncBinding,
@@ -3269,14 +3275,77 @@ const AppContent: React.FC = () => {
   }, [config.terminals, deviceId]);
 
   useEffect(() => {
+    if (import.meta.env.VITE_POS_FISCAL_LOCAL_PRINT_QA !== 'true'
+      || !isNativeAndroidRuntime() || !currentUser || !isDataLoaded) return;
+    const print = async (input: import('./services/fiscal/SignedE32PrintQa').SignedE32QaInput) => {
+      const terminal = getCurrentTerminal();
+      if (!terminal) throw new Error('QA_TERMINAL_NOT_READY');
+      const { printSignedE32Qa } = await import('./services/fiscal/SignedE32PrintQa');
+      return printSignedE32Qa(input, config, terminal.id);
+    };
+    const qaWindow = window as Window & { clicPosQaPrintSignedE32?: typeof print };
+    qaWindow.clicPosQaPrintSignedE32 = print;
+    return () => {
+      if (qaWindow.clicPosQaPrintSignedE32 === print) delete qaWindow.clicPosQaPrintSignedE32;
+    };
+  }, [config, currentUser, getCurrentTerminal, isDataLoaded]);
+
+  // The ERP lifecycle effect owns the STARTUP sync plus the heartbeat, config
+  // safety and outbox timers. `configUpdated` always replaces `config.terminals`
+  // with a brand new array, so depending on `getCurrentTerminal` used to
+  // re-create that effect on every ordinary snapshot and re-arm the 8 s STARTUP
+  // timer (STARTUP → manifest → forced config → configUpdated loop). Runtime
+  // reads now go through a ref, and the effect only restarts when the effective
+  // binding identity (tenant/local terminal/ERP terminal/device) changes.
+  const currentTerminalRef = React.useRef<ReturnType<typeof getCurrentTerminal>>(undefined);
+  React.useEffect(() => {
+    currentTerminalRef.current = getCurrentTerminal();
+  }, [getCurrentTerminal]);
+
+  const erpBindingIdentity = React.useMemo(() => {
+    const storedTenantIdentity = getStoredTenantIdentity();
+    return resolveErpBindingIdentity({
+      terminal: getCurrentTerminal() ?? null,
+      deviceId,
+      configTenantId: config.metadata?.tenantId ?? null,
+      storedTenantId: storedTenantIdentity.tenantId ?? null,
+      storedActiveTerminalId:
+        localStorage.getItem('active_terminal_id')
+        || localStorage.getItem('CLIC_POS_TERMINAL_ID'),
+      storedErpTerminalId: localStorage.getItem('clic_erp_sync_terminal_id'),
+    });
+  }, [config, deviceId, getCurrentTerminal]);
+  const erpBindingIdentityKey = erpBindingIdentity.key;
+  const startupSyncBindingRef = React.useRef<{ key: string; requested: boolean } | null>(null);
+
+  useEffect(() => {
     const activeTerminalId = localStorage.getItem('active_terminal_id');
     const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
     const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id');
-    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, {
-      activeTerminalId,
-      bindingTerminalId,
-      bindingLocalTerminalId,
-    });
+    const options = { activeTerminalId, bindingTerminalId, bindingLocalTerminalId };
+    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, options);
+    const storedConfigId = (config as BusinessConfig & { id?: string }).id;
+    if (sanitized.changed && dbAdapter.saveConfigIfUnchanged && (!storedConfigId || storedConfigId === 'current')) {
+      let current = true;
+      const repair = (stored: BusinessConfig) => clearDuplicateDeviceAssignments(stored, deviceId, options);
+      void (async () => {
+        try {
+          const repaired = await persistTerminalAssignmentRepair(dbAdapter, repair, () => current);
+          const accepted = repaired ?? (current ? await dbAdapter.getDocument<BusinessConfig>('config', 'current') : null);
+          if (accepted && current && !repair(accepted).changed) {
+            setConfig(previous => {
+              if (previous !== config) return previous;
+              const auditLogs = new Map((previous.auditLogs || []).map(log => [log.id, log]));
+              for (const log of accepted.auditLogs || []) auditLogs.set(log.id, log);
+              return auditLogs.size ? { ...accepted, auditLogs: [...auditLogs.values()] } : accepted;
+            });
+          }
+        } catch (error) {
+          console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+        }
+      })();
+      return () => { current = false; };
+    }
     const nextConfig = sanitized.config;
 
     const aliasPreferredTerminal =
@@ -3317,7 +3386,7 @@ const AppContent: React.FC = () => {
 
     if (!sanitized.changed && !shouldRepairActiveTerminal && !shouldRepairErpBinding && !shouldRepairLocalTerminal && !shouldRepairErpTenant) return;
 
-    setConfig(nextConfig);
+    if (sanitized.changed) setConfig(nextConfig);
     if (preferredTerminalId) {
       localStorage.setItem('active_terminal_id', preferredTerminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', preferredTerminalId);
@@ -3359,9 +3428,11 @@ const AppContent: React.FC = () => {
         console.warn('Failed to repair ERP terminal sync profile from selected terminal identity', error);
       }
     }
-    void db.save('config', nextConfig).catch((error) => {
-      console.warn('Failed to persist duplicate terminal assignment cleanup', error);
-    });
+    if (sanitized.changed) {
+      void db.save('config', nextConfig).catch(error => {
+        console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+      });
+    }
   }, [config, deviceId]);
 
   // Helper: Get current device role (raw value, no fallback)
@@ -3925,7 +3996,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const setupPending = hasPendingTerminalSetup();
-    const currentTerminal = getCurrentTerminal();
+    const currentTerminal = currentTerminalRef.current;
     const tenantIdentity = getStoredTenantIdentity();
 
     if (!isDataLoaded || setupPending || !erpLifecycleReady || terminalAuthorizationBlock) return;
@@ -3934,13 +4005,15 @@ const AppContent: React.FC = () => {
 
     let disposed = false;
     const publishEndpoint = async () => {
-      const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
-      const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
+      const terminal = currentTerminalRef.current;
+      if (!terminal) return;
+      const operationalTerminalId = terminal.config?.stationNumber || terminal.id;
+      const terminalName = terminal.config?.terminalName || operationalTerminalId;
       const endpoint = await publishMasterEndpointToCloud({
         deviceId,
         terminalId: operationalTerminalId,
         terminalName,
-        isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+        isPrimary: terminal.config?.isPrimaryNode !== false,
       });
 
       if (!disposed && endpoint?.localIp) {
@@ -3988,13 +4061,16 @@ const AppContent: React.FC = () => {
       const deferred = await waitForBackgroundSyncWindow();
       if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: `terminal_config:${reason}` });
       if (disposed) return;
+      const terminal = currentTerminalRef.current;
+      if (!terminal) return;
+      const currentTenantIdentity = getStoredTenantIdentity();
       const erpTerminalId =
-        currentTerminal.config?.erpTerminalId
+        terminal.config?.erpTerminalId
         || loadSyncProfile().erpTerminalId
         || localStorage.getItem('clic_erp_sync_terminal_id')
-        || currentTerminal.id;
+        || terminal.id;
       const erpBaseUrl = resolveSetupErpBaseUrl();
-      const tenantId = tenantIdentity.tenantId || localStorage.getItem('active_tenant_id');
+      const tenantId = currentTenantIdentity.tenantId || localStorage.getItem('active_tenant_id');
       if (!erpBaseUrl || !erpTerminalId || !tenantId || !navigator.onLine) return;
 
       await terminalConfigRequestCoordinator.request<Record<string, unknown>>({
@@ -4019,27 +4095,31 @@ const AppContent: React.FC = () => {
     };
 
     const resolveLifecycleTerminalContext = () => {
-      const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
+      const terminal = currentTerminalRef.current;
+      if (!terminal) return null;
+      const operationalTerminalId = terminal.config?.stationNumber || terminal.id;
       return {
         operationalTerminalId,
         erpTerminalId:
-          currentTerminal.config?.erpTerminalId
+          terminal.config?.erpTerminalId
           || loadSyncProfile().erpTerminalId
           || localStorage.getItem('clic_erp_sync_terminal_id')
           || operationalTerminalId,
-        terminalName: currentTerminal.config?.terminalName || operationalTerminalId,
+        terminalName: terminal.config?.terminalName || operationalTerminalId,
       };
     };
 
     const sendPeriodicErpHeartbeat = async () => {
-      const { operationalTerminalId, erpTerminalId, terminalName } = resolveLifecycleTerminalContext();
+      const terminalContext = resolveLifecycleTerminalContext();
+      if (!terminalContext) return;
+      const { operationalTerminalId, erpTerminalId, terminalName } = terminalContext;
       try {
         const result = await heartbeatErpSyncTerminal({
           deviceId,
           terminalId: erpTerminalId,
           localTerminalId: operationalTerminalId,
           terminalName,
-          isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+          isPrimary: currentTerminalRef.current?.config?.isPrimaryNode !== false,
           pendingEvents: 0,
         }, deviceId);
 
@@ -4115,13 +4195,15 @@ const AppContent: React.FC = () => {
       }
 
       try {
-        const { operationalTerminalId, erpTerminalId, terminalName } = resolveLifecycleTerminalContext();
+        const terminalContext = resolveLifecycleTerminalContext();
+        if (!terminalContext) return false;
+        const { operationalTerminalId, erpTerminalId, terminalName } = terminalContext;
         const result = await ensureErpSyncLifecycle({
           deviceId,
           terminalId: erpTerminalId,
           localTerminalId: operationalTerminalId,
           terminalName,
-          isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+          isPrimary: currentTerminalRef.current?.config?.isPrimaryNode !== false,
           pendingEvents: 0,
         });
 
@@ -4173,7 +4255,10 @@ const AppContent: React.FC = () => {
         if (!disposed && blockingMessage) {
           if (blockingMessage === DEVICE_SUPERSEDED_MESSAGE) {
             lockSupersededTerminal(blockingMessage, {
-              terminalId: currentTerminal.config?.erpTerminalId || currentTerminal.id,
+              terminalId:
+                currentTerminalRef.current?.config?.erpTerminalId
+                || currentTerminalRef.current?.id
+                || undefined,
               requestDeviceId: deviceId,
               payload: (error as any)?.payload,
             });
@@ -4310,9 +4395,21 @@ const AppContent: React.FC = () => {
     void publishEndpoint();
     let startupSyncTimeoutId: number | null = null;
     if (!isPosOnlyCloudStagingTarget()) {
-      startupSyncTimeoutId = window.setTimeout(() => {
-        if (!disposed) void syncTriggerCoordinator.request({ reason: 'STARTUP' });
-      }, 8000);
+      // Re-arm the 8 s STARTUP only when the effective binding changes. An
+      // ordinary configUpdated snapshot keeps the same identity key, so the
+      // effect is not re-created and this timer is not scheduled again.
+      if (startupSyncBindingRef.current?.key !== erpBindingIdentityKey) {
+        startupSyncBindingRef.current = { key: erpBindingIdentityKey, requested: false };
+      }
+      if (!startupSyncBindingRef.current.requested) {
+        startupSyncTimeoutId = window.setTimeout(() => {
+          if (disposed) return;
+          if (startupSyncBindingRef.current?.key === erpBindingIdentityKey) {
+            startupSyncBindingRef.current.requested = true;
+          }
+          void syncTriggerCoordinator.request({ reason: 'STARTUP' });
+        }, 8000);
+      }
     } else {
       console.log('[CLOUD STAGING] ERP lifecycle and manifest refresh disabled for POS_CLOUD_STAGING.');
     }
@@ -4340,7 +4437,9 @@ const AppContent: React.FC = () => {
           } catch (error) {
             outboxPollFailures += 1;
             console.warn('[ERP SYNC] periodic outbox pull failed; retrying with backoff.', {
-              terminalId: currentTerminal.config?.erpTerminalId || currentTerminal.id,
+              terminalId:
+                currentTerminalRef.current?.config?.erpTerminalId
+                || currentTerminalRef.current?.id,
               failures: outboxPollFailures,
               error,
             });
@@ -4404,7 +4503,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleErpOnline);
       document.removeEventListener('visibilitychange', handleErpAppResume);
     };
-  }, [erpLifecycleReady, deviceId, getCurrentTerminal, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock]);
+  }, [erpLifecycleReady, deviceId, erpBindingIdentityKey, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -8355,6 +8454,9 @@ const AppContent: React.FC = () => {
       }
     };
 
+    // V3 loads catalog and inventory through its scoped native boundary.
+    const legacyProductsMissing = !LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && products.length === 0;
+
     // Poll for data every 5 seconds if we don't have any yet (for remote terminals)
     // Increased from 3s to give NetworkSyncService more time to complete
     const interval = setInterval(() => {
@@ -8362,13 +8464,13 @@ const AppContent: React.FC = () => {
         isDataLoaded
         && (
           users.length === 0
-          || products.length === 0
+          || legacyProductsMissing
           || warehouses.length === 0
           || internalSequences.length === 0
         )
       ) {
         refreshDataAfterSync();
-        if (isNativeAndroidRuntime() && (products.length === 0 || warehouses.length === 0)) {
+        if (isNativeAndroidRuntime() && (legacyProductsMissing || warehouses.length === 0)) {
           void hydrateNativeCatalogFromDb(
             { setProducts, setWarehouses, setProductStocks },
             'poll',
@@ -8378,7 +8480,7 @@ const AppContent: React.FC = () => {
     }, 5000); // Check every 5 seconds
 
     return () => clearInterval(interval);
-  }, [users.length, products.length, warehouses.length, isDataLoaded]);
+  }, [users.length, products.length, warehouses.length, internalSequences.length, isDataLoaded]);
 
   useEffect(() => {
     // Poll tables if in restaurant mode OR retail with tables enabled
@@ -8678,12 +8780,32 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('v3CatalogUpdated', applyV3CatalogConfig);
   }, [config]);
 
+  const renderedConfig = useRef(config);
+  renderedConfig.current = config;
+  const salesConfigPublicationRevision = useRef(0);
+  const publishedSalesConfigs = useRef(new WeakMap<BusinessConfig, { previous: BusinessConfig; revision: number }>());
+  useEffect(() => {
+    const adoptPersistedAuthority = (event: Event) => {
+      const next = (event as CustomEvent<BusinessConfig>).detail;
+      if (next && usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
+        const revision = ++salesConfigPublicationRevision.current;
+        publishedSalesConfigs.current.set(next, { previous: renderedConfig.current, revision });
+        setConfig(next);
+      }
+    };
+    window.addEventListener(V3_SALES_CONFIG_PUBLISHED, adoptPersistedAuthority);
+    return () => window.removeEventListener(V3_SALES_CONFIG_PUBLISHED, adoptPersistedAuthority);
+  }, []);
+
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
       freezePhase('CONFIG_EVENT_ENTER');
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
+      const published = publishedSalesConfigs.current.get(incomingConfig);
+      const salesConfigRevision = published?.revision ?? salesConfigPublicationRevision.current;
       await waitForBackgroundSyncWindow();
+      if (salesConfigRevision !== salesConfigPublicationRevision.current) return;
       freezePhase('CONFIG_EVENT_WINDOW_READY');
 
       // Detect if we actually need a full sync re-init
@@ -8702,7 +8824,7 @@ const AppContent: React.FC = () => {
         };
       };
 
-      const oldConfigJson = JSON.stringify(sanitize(config));
+      const oldConfigJson = JSON.stringify(sanitize(published?.previous ?? config));
       const newConfigJson = JSON.stringify(sanitize(incomingConfig));
       freezePhase('CONFIG_EVENT_COMPARED');
       const hasSubstantialChanges = oldConfigJson !== newConfigJson;
@@ -8781,7 +8903,9 @@ const AppContent: React.FC = () => {
           const hasTinyCatalog = localCount > 0 && localCount <= 5;
           const hasCategoryMismatch = matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5;
 
-          if ((hasTinyCatalog || hasCategoryMismatch) && resolveSyncTarget().canPullMasters) {
+          const syncTargetForDrift = resolveSyncTarget();
+          const v3AuthorityForDrift = usesLargeMasterSyncV3Authority(syncTargetForDrift.kind);
+          if ((hasTinyCatalog || hasCategoryMismatch) && syncTargetForDrift.canPullMasters && !v3AuthorityForDrift) {
             console.warn(
               `⚠️ App: Runtime config drift detected on ${currentTerminal.id}. ` +
               `localProducts=${localCount}, allowed=${terminalAllowedCategories.length}, matched=${matchedAllowedCategoriesCount}. ` +
@@ -9991,6 +10115,16 @@ const AppContent: React.FC = () => {
     setRecoverySequenceInput('');
     alert('Secuencia fiscal local alineada correctamente.');
   };
+
+  // Audit mirrors (supervisor authorizations) update the in-memory config; the durable
+  // source is posAuditEvents. Persisting the whole config here rebuilt/replaceConfig-blocked
+  // the catalog for ~633 ms per authorization.
+  const handleAuditLogsMirror = useCallback((log: NonNullable<BusinessConfig['auditLogs']>[number]) => {
+    setConfig(current => ({
+      ...current,
+      auditLogs: [...(current.auditLogs || []).filter(entry => entry.id !== log.id), log],
+    }));
+  }, []);
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log
@@ -11502,7 +11636,7 @@ const AppContent: React.FC = () => {
     if (!documentCode || !documentCode.startsWith('E')) return;
     if (!electronicNcf) return;
 
-    if(providerId==='MSELLER'){if(transaction.fiscalWorkflowCheckoutId||(transaction as any).articleFormatWire?.schema_version===2)await fiscalWorkflowV2Client.consult(transaction.id);else await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true);return;}
+    if(providerId==='MSELLER'){if(transaction.fiscalWorkflowCheckoutId||(transaction as any).articleFormatWire?.schema_version===2){await fiscalWorkflowV2Client.consult(transaction.id);void warmFiscalPrintEvidence(transaction).catch(() => false);}else await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true);return;}
     if (transaction.fiscalClassificationProjection && !explicitClassificationRetry) return;
     try {
       let fiscalConfig = config;
@@ -11818,6 +11952,7 @@ const AppContent: React.FC = () => {
   }), [isDataLoaded, fiscalHistoryHydrated, isSecurityLoaded, deviceId, fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction, onCommitted?: (transaction: Transaction) => void) => {
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_START');
     if(txn.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&dbAdapter.readDispatchCommittedReceipt){const original=await dbAdapter.readDispatchCommittedReceipt(txn.id);if(original){if(financialIdentity(original)!==financialIdentity(txn))throw Error('DISPATCH_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);onCommitted?.(original);return;}}
     if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     if(txn.inventoryEffectsContract!=='WAREHOUSE_RESERVATION_V1')assertFormatsPostingClosed(txn.items || []);
@@ -11839,6 +11974,7 @@ const AppContent: React.FC = () => {
       }
     }
     await db.assertFiscalTransactionAuthority({ ...txn, terminalId: fiscalTerminal?.id || txn.terminalId }, fiscalTerminal?.config);
+    recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_AUTHORITY_DONE');
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const terminal = (config.terminals || []).find(row => row.config?.currentDeviceId === deviceId);
       const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
@@ -11854,7 +11990,10 @@ const AppContent: React.FC = () => {
         if (!completed) throw error;
         result = {transaction:completed,created:false};
       }
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_V3_SAVED');
       onCommitted?.(result.transaction);
+      const committedFiscalCheckout = result.created && result.transaction.fiscalProvider === 'MSELLER' && result.transaction.fiscalWorkflowCheckoutId;
+      if (committedFiscalCheckout) void prepareCommittedFiscalPrint(result.transaction).catch(console.error);
       if(result.created&&txn.legacySaleNumbering===1)transactionService.broadcastCommittedNumbers(result.transaction);
       if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId||txn.legacySaleNumbering===1) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
@@ -11862,7 +12001,18 @@ const AppContent: React.FC = () => {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;
         if (updated) setCustomers(previous => previous.map(row => row.id === updated.id ? updated : row));
       }
-      syncFiscalDocument(result.transaction).catch(console.error);
+      recordCheckoutDiagnostic('CHECKOUT_COMMIT_COMPLETE_POST_SAVE_HANDOFF');
+      if (!committedFiscalCheckout) {
+        syncFiscalDocument(result.transaction).catch(console.error);
+        void backgroundSyncManager.flushDurableOutboxNow('sale-commit').catch((error) => {
+          console.error(JSON.stringify({
+            event: 'pos_outbox_immediate_flush_error',
+            stage: 'app-v3',
+            reason: 'sale-commit',
+            error: error instanceof Error ? error.message : String(error || 'FLUSH_FAILED'),
+          }));
+        });
+      }
       backgroundSyncManager.triggerSync().catch(console.error);
       return;
     }
@@ -11990,6 +12140,14 @@ const AppContent: React.FC = () => {
     // Publish UI state only after the durable commit succeeds.
     setTransactions([...transactions, txn]);
     syncFiscalDocument(txn).catch(console.error);
+    void backgroundSyncManager.flushDurableOutboxNow('sale-commit').catch((error) => {
+      console.error(JSON.stringify({
+        event: 'pos_outbox_immediate_flush_error',
+        stage: 'app',
+        reason: 'sale-commit',
+        error: error instanceof Error ? error.message : String(error || 'FLUSH_FAILED'),
+      }));
+    });
     backgroundSyncManager.triggerSync().catch(console.error);
 
     const affectedPairs = new Set<string>();
@@ -13226,7 +13384,7 @@ const AppContent: React.FC = () => {
     const returnFiscalMode=getEffectiveFiscalComplianceConfig(config,currentTerminal?.config).mode;
     if(returnFiscalMode==='ECF' && !(originalTx as any).articleFormatWire){
       try{
-        if(!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED||originalTx.erpRefundSource||options.refundPayments?.length)throw Error('FISCAL_RETURN_SOURCE_PROOF_REQUIRED');
+        console.warn('[RETURN/GUARD]',{v3:LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,erpRefundSource:!!originalTx.erpRefundSource,displayId:originalTx.displayId});if(originalTx.erpRefundSource)throw Error('FISCAL_RETURN_SOURCE_PROOF_REQUIRED');
         const sequences=await db.get('internalSequences') as DocumentSeries[];
         const seriesId=resolveDocumentAssignmentId('REFUND',sequences,currentTerminal?.config?.documentAssignments?.REFUND)
           ||resolveDocumentAssignmentId('REFUND',sequences,'REFUND');
@@ -13242,15 +13400,16 @@ const AppContent: React.FC = () => {
             const returned=source.items.reduce((n,l)=>n+Math.abs(l.quantity),0);
             const result=await persistStandaloneRefundTransaction(source,{fiscalReturnAttemptId:attempt.id,
               warehouseId:attempt.preparation!.returnSnapshot.warehouseId,terminalId:source.terminalId,originalSource:fresh,
-              originalTransaction:{...fresh,status:returned>=remaining?'REFUNDED':'PARTIAL_REFUND'},persistOriginal:true,
+              originalTransaction:{...markOriginalReturnPending(fresh,returned>=remaining?'REFUNDED':'PARTIAL_REFUND')},persistOriginal:true,
               adjustCustomerBalance:Number(attempt.preparation!.returnSnapshot.pendingBalance)>0,skipWalletDeposit:true,conditions});
             return result.refund;
           }});
         const result=await consumer.process(originalTx,itemsToRefund,conditions,reason,seriesId,{id:currentUser?.id||'sys',name:currentUser?.name||'System'},options.returnSettlementDestination);
-        const fresh=await db.get('transactions') as Transaction[];if(Array.isArray(fresh))setTransactions(fresh);
-        const products=await readAppProducts();if(products.length)setProducts(products);
+        void prepareCommittedFiscalPrint(result).catch(console.error);
+        const [fresh, products] = await Promise.all([db.get('transactions'), readAppProducts()]);
+        if (Array.isArray(fresh)) setTransactions(fresh as Transaction[]);
+        if (products.length) setProducts(products);
         backgroundSyncManager.triggerSync().catch(console.error);
-        void fiscalWorkflowV2Client.consult(result.id).catch(()=>{});
         alert(`Devolución guardada: ${result.displayId || result.id}. Pendiente de sincronización y confirmación fiscal; guardar no equivale a aceptación DGII.`);
         return result;
       }catch(error){
@@ -13266,7 +13425,8 @@ const AppContent: React.FC = () => {
           reason: code,
         });
         const detail = returnOperatorMessage(error);
-        throw Error(detail.includes(code) ? detail : `${detail} Código: ${code}.`);
+        // The technical code stays in the checkout diagnostic/console; the cashier sees a natural message.
+        throw Error(`${detail} [${code}]`);
       }
     }
     originalTx = await readRefundOriginal(originalTx);
@@ -14559,6 +14719,7 @@ const AppContent: React.FC = () => {
             onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={handleAddCustomer}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
             onUpdateActiveTableGuests={handleUpdateActiveTableGuests}
@@ -14826,6 +14987,7 @@ const AppContent: React.FC = () => {
             onInitialSelectionHandled={() => setScanTargetTicketId(null)}
             activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
+            onAuditLogsMirror={handleAuditLogsMirror}
             onClose={() => {
               setScanTargetTicketId(null); // Clear selection on close
               const returnView = historyReturnViewRef.current;
@@ -14845,12 +15007,13 @@ const AppContent: React.FC = () => {
               try {
                 return await handleProcessRefund(tx, items || [], validConditions, actualReason, options);
               } catch (refundError: any) {
+                console.warn('[RETURN/OUTER]', refundError?.message || refundError);
                 console.error('❌ Refund flow failed:', refundError);
                 const refundDetail = describeV3Error(refundError);
                 if (options?.settlementMode === 'CARD_VOID') {
                   alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundDetail}`);
                 } else {
-                  alert(`Error procesando devolución: ${refundDetail}`);
+                  alert(`Error procesando devolución: ${refundDetail} [${refundError?.message || refundError}]`);
                 }
                 throw refundError;
               }

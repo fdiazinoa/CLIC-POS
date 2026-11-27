@@ -1,3 +1,4 @@
+import { captureSettingsReturnQaCaller, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import { assertLegacySecurityWriteAllowed, readPosSecurityRecords } from '../sync/PosSecurityV2Consumer';
 import { recoveryUuid } from "./RecoveryUuid";
 import { projectNativeZConfiguration } from "./NativeZConfiguration";
@@ -149,8 +150,10 @@ export function recoveryDatabase(
         key === "bulkUpsert" ||
         key === "saveCollection"
       )
-        return (collectionName: string, value: any) =>
-          exclusive(async () => {
+        return (collectionName: string, value: any) => {
+          const caller = key === 'saveCollection' && collectionName === 'config'
+            ? captureSettingsReturnQaCaller() : undefined;
+          return exclusive(async () => {
             await assertLegacySecurityWriteAllowed(base, collectionName);
             if (collectionName === 'syncMetadata' && base.readPosSecurityState) {
               const records = await readPosSecurityRecords(base);
@@ -158,8 +161,12 @@ export function recoveryDatabase(
               if (key === 'saveCollection') value = [...(Array.isArray(value) ? value : []).filter(row => !protectedId(row)), ...records];
               else if ((key === 'saveDocument' ? [value] : value).some(protectedId)) throw new Error('POS_SECURITY_LEGACY_STATE_WRITE_BLOCKED');
             }
-            if (!enabled() || !CAPTURE_COLLECTIONS[collectionName])
+            if (!enabled() || !CAPTURE_COLLECTIONS[collectionName]) {
+              if (caller) {
+                return measureSettingsReturnQa(`sqlite.config.caller.${caller}`, () => target.saveCollection(collectionName, value));
+              }
               return (target[key] as any).call(target, collectionName, value);
+            }
             const docs = key === "saveDocument" ? [value] : value;
             if (!Array.isArray(docs))
               throw new Error("RECOVERY_INVALID_COLLECTION");
@@ -172,6 +179,7 @@ export function recoveryDatabase(
               key === "saveCollection" ? [collectionName] : [],
             );
           });
+        };
       if (
         key === "commitFinancialTransaction" &&
         target.commitFinancialTransaction

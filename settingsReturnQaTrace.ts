@@ -3,6 +3,7 @@ type Event = { name: string; startMs: number; durationMs?: number; ok?: boolean;
 function createTrace() {
   let run: { started: number; events: Event[]; queries: Map<string, number>; dropped: number } | undefined;
   return {
+    active: () => Boolean(run),
     start() { run = { started: performance.now(), events: [], queries: new Map(), dropped: 0 }; },
     stop() {
       const captured = run;
@@ -60,6 +61,13 @@ if (trace && typeof window !== 'undefined') Object.assign(window, {
   posSettingsReturnTrace: { start: trace.start, stop: trace.stop },
 });
 
+/** Export bundle coordinates only. Call this before the async persistence queue loses its caller. */
+export function captureSettingsReturnQaCaller(): string | undefined {
+  if (!trace?.active()) return;
+  const frames = (new Error().stack ?? '').match(/\b[\w.-]+\.js:\d+:\d+\b/g)?.slice(1, 6);
+  return frames?.length ? frames.join('|') : undefined;
+}
+
 export const markSettingsReturnQa = (name: string) => trace?.mark(name);
 export function measureSettingsReturnQa<T>(name: string, operation: () => Promise<T>, sql?: string, values?: unknown) {
   return trace ? trace.measure(name, operation, sql, values) : operation();
@@ -74,7 +82,7 @@ const v3ErrorCodes = new Set([
 ]);
 const v3BindingReasons = new Set(['IDENTITY', 'ORIGIN', 'CREDENTIAL', 'CONFIG_SCOPE', 'OWNER', 'TRANSITION', 'RUNTIME']);
 
-export function markSettingsReturnV3Failure(stage: 'resume' | 'acquire', error: unknown) {
+export function markSettingsReturnV3Failure(stage: 'resume' | 'acquire' | 'add' | 'add-ui-queue' | 'add-initial-config' | 'add-recheck-config', error: unknown) {
   if (!trace) return;
   const value = error as { code?: unknown; message?: unknown; bindingReason?: unknown } | null;
   const rawCode = value?.code ?? value?.message;

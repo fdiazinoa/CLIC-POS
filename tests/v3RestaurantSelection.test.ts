@@ -49,7 +49,7 @@ test('actual barcode callback opens restaurant configuration before any cart mut
  const dependencies:any={v3Operational:boundary,uiLifetime:{current:{capture:()=>()=>true}},presentationMasters:{},products:[],addContext:{current:boundary},scanQueue:{current:{run:(_guard:any,run:any)=>run()}},assertV3UIContext:(guard:any)=>assert.equal(guard(),true),isWeightedProduct:()=>false,productHasRestaurantConfiguration,handleProductClick:(product:any)=>{opened=product;},addToCart:()=>{adds++;return true;},isReturnMode:false};
  const code=ts.transpileModule('const invoke='+callback.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
  const invoke=new Function(...Object.keys(dependencies),code+';return invoke;')(...Object.values(dependencies));
- const result=await invoke('322');assert.equal(result.added,true);assert.strictEqual(opened,source);assert.equal(adds,0);
+ const result=await invoke('322');assert.equal(result.added,false);assert.equal(result.pending,true);assert.strictEqual(opened,source);assert.equal(adds,0);
 });
 
 

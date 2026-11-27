@@ -18,7 +18,7 @@ test('normal weighted barcode opens scale and returns before adding a default un
   assert.match(click, /if \(isWeighted\) \{[\s\S]*resolveSaleScales\(config, activeTerminalId\)[\s\S]*setProductForScale\(product\)/);
   const scan = source.slice(source.indexOf('const performBarcode ='), source.indexOf('const processBarcode ='));
   const normal = scan.slice(scan.indexOf('// 2. Normal Barcode Search'));
-  assert.match(normal, /if \(isWeightedProduct\(match.product\)\) \{\s*assertWeightedCodeInput\(match.product, trimmed\);\s*handleProductClick\(match.product\);\s*return \{ success: true,[\s\S]*?\};\s*\}\s*const hasConfiguredVariant/);
+  assert.match(normal, /if \(isWeightedProduct\(match.product\)\) \{\s*assertWeightedCodeInput\(match.product, trimmed\);\s*handleProductClick\(match.product\);\s*return finish\('handled',[\s\S]*?\);\s*\}\s*const hasConfiguredVariant/);
   assert.ok(normal.indexOf('isWeightedProduct(match.product)') < normal.indexOf('await addToCart('));
   assert.ok(scan.indexOf('routeScannedCoupon(trimmed)') < scan.indexOf('// 2. Normal Barcode Search'));
   assert.ok(scan.indexOf('// 1. Try Scale Parser') < scan.indexOf('// 2. Normal Barcode Search'));

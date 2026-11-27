@@ -22,6 +22,7 @@ test('new ERP terminal uses its own preference defaults while existing terminal 
   currentConfig.terminals = [currentConfig.terminals[0]];
   const existing = currentConfig.terminals[0];
   existing.config.erpTerminalId = 'ERP-A';
+  existing.config.msellerRealtimePrintEnabled = true;
   existing.config.ux.showProductImages = false;
   existing.config.ux.viewMode = 'RETAIL';
   existing.config.startWithAgenda = true;
@@ -37,6 +38,8 @@ test('new ERP terminal uses its own preference defaults while existing terminal 
   ] });
   const a = cards.find(card => card.erpTerminalId === 'ERP-A')!.config;
   const b = cards.find(card => card.erpTerminalId === 'ERP-B')!.config;
+  assert.equal(a.msellerRealtimePrintEnabled, true);
+  assert.equal(b.msellerRealtimePrintEnabled, undefined);
   assert.deepEqual(a.operational.orderNumbers, before.operational.orderNumbers);
   assert.equal(a.ux.showProductImages, false);
   assert.equal(a.security.requirePinForVoid, false);
@@ -51,6 +54,24 @@ test('new ERP terminal uses its own preference defaults while existing terminal 
   assert.equal((b.security as any).requireManagerForVoid, undefined);
   assert.deepEqual(b.hardware, before.hardware);
   assert.deepEqual(existing.config, before);
+});
+
+test('MSeller print hint preference follows only the exact ERP binding of an existing box', () => {
+  const currentConfig = getInitialConfig('Supermercado' as any);
+  const existing = currentConfig.terminals[0];
+  const canonicalId = 'cee01612-f704-4c24-ac5d-9d424fa520c3';
+  const otherId = '57b169f8-a3b1-453f-b5b7-ea80d50ebb29';
+  existing.id = 'POS-B';
+  delete existing.config.erpTerminalId;
+  existing.config.erpBinding = { terminalId: canonicalId };
+  existing.config.msellerRealtimePrintEnabled = true;
+  currentConfig.terminals = [existing];
+
+  const cards = materializeErpTerminalCards({ currentConfig, posDeviceId: 'DEV-NEW', terminals: [
+    { id: canonicalId, terminal_code: 'POS-A' }, { id: otherId, terminal_code: 'POS-B' },
+  ] });
+  assert.equal(cards.find(card => card.erpTerminalId === canonicalId)!.config.msellerRealtimePrintEnabled, true);
+  assert.equal(cards.find(card => card.erpTerminalId === otherId)!.config.msellerRealtimePrintEnabled, undefined);
 });
 
 test('keeps occupied ERP terminals visible with their own operational codes', () => {

@@ -88,7 +88,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          if (!confirmed) return;
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
          // Un intento con cobros ligados solo lo puede cerrar el ERP con autorización de un supervisor.
-         const hasPayments = !/sin intentos de pago/i.test(snapshot?.payments || 'sin intentos de pago');
+         const hasPayments = !/^sin pagos$/i.test(snapshot?.payments || 'sin pagos') || !/sin intentos de pago/i.test(snapshot?.paymentIntents || 'sin intentos de pago');
          const operator = hasPayments ? await requestSupervisor() : null;
          if (hasPayments && !operator) { setBusy(null); return; }
          const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt(operator ? { operator } : {});
@@ -143,11 +143,14 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          `Capacidad fiscal V2: ${snapshot.enabled ? 'sí' : 'no'}`,
          `Sesión: ${snapshot.session || 'sin vencimiento'}`,
          `Reserva offline: ${snapshot.readiness} · lista: ${snapshot.offlineReady ? 'sí' : 'no'}`,
+         `Motivo de la reserva: ${snapshot.reserveReason || 'no aplica'}`,
          `Intento fiscal: ${snapshot.attempt}`,
-         `Cobros ligados al intento: ${snapshot.payments || 'sin intentos de pago'}`,
+         `Cobros ligados al intento: ${snapshot.payments || 'sin pagos'}`,
+         `Payment intents: ${snapshot.paymentIntents || 'sin intentos de pago'}`,
          `Retiro fiscal en el ERP: ${snapshot.erpRetirement || 'sin consultar'}`,
-         `Vinculación: ${snapshot.binding}`,
-         `Autorización local: ${snapshot.lease}`,
+         `Vinculación: ${snapshot.binding}${snapshot.bindingHash ? ` · hash ${snapshot.bindingHash}` : ''}${snapshot.recordBindingHash ? ` · registro ${snapshot.recordBindingHash}` : ''}`,
+         `Sesión/transporte: ${snapshot.transport || 'sin verificar'}`,
+         `Comprobantes locales: ${snapshot.lease}`,
          `Último error de preparación: ${snapshot.lastError || 'ninguno'}`,
       ].join('\n');
       try { await navigator.clipboard.writeText(text); setNote('Diagnóstico copiado.'); } catch { setNote(text); }
@@ -158,12 +161,15 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       { label: 'Capacidad fiscal V2', value: snapshot.enabled ? 'Habilitada' : 'No habilitada por el ERP', ok: snapshot.enabled },
       { label: 'Sesión de la terminal', value: snapshot.session || 'sin vencimiento', ok: true },
       { label: 'Reserva fiscal local', value: snapshot.readiness, ok: snapshot.offlineReady || /READY/.test(snapshot.readiness) },
-      { label: 'Comprobantes locales', value: snapshot.lease, ok: !/SIN RESERVA/.test(snapshot.lease) },
+      { label: 'Comprobantes locales', value: snapshot.lease, ok: snapshot.reserveAvailable },
+      ...(snapshot.reserveAvailable ? [] : [{ label: 'Motivo de la reserva', value: snapshot.reserveReason || 'MISSING_AUTHORIZATION', ok: false }]),
       ...(snapshot.e32 ? [{ label: 'E32 para cobrar', value: snapshot.e32.value, ok: snapshot.e32.available }] : []),
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
-      { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin intentos de pago', ok: /sin intento|DECLINED/i.test(snapshot.payments || 'sin intentos de pago') },
+      { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin pagos', ok: /^(sin pagos|sin intento)$/i.test(snapshot.payments || 'sin pagos') },
+      { label: 'Payment intents', value: snapshot.paymentIntents || 'sin intentos de pago', ok: /sin intento|DECLINED/i.test(snapshot.paymentIntents || 'sin intentos de pago') },
       { label: 'Retiro fiscal en el ERP', value: snapshot.erpRetirement || 'sin consultar', ok: snapshot.erpRetirement === 'activo' },
-      { label: 'Vinculación', value: snapshot.binding || '—', ok: /misma vinculación|autoridad local OK/.test(snapshot.binding) },
+      { label: 'Vinculación', value: [snapshot.binding || '—', snapshot.bindingHash ? `hash ${snapshot.bindingHash}` : '', snapshot.recordBindingHash ? `registro ${snapshot.recordBindingHash}` : ''].filter(Boolean).join(' · '), ok: /misma vinculación|autoridad local OK/.test(snapshot.binding) },
+      { label: 'Sesión/transporte', value: snapshot.transport || 'sin verificar', ok: /verificada/i.test(snapshot.transport || '') },
       { label: 'Ámbito', value: snapshot.scope || '—', ok: Boolean(snapshot.scope) },
    ] : [];
 

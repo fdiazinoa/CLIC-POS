@@ -51,6 +51,10 @@ export type V3SessionCoordinator<T extends V3SetupSession> = ((refresh?: boolean
 export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSession>(
   open: (refresh: boolean, metric?: (metric: LargeMasterSyncV3Metric) => void) => Promise<T>,
   scope?: () => string,
+  recovery?: {
+    openCached: typeof open;
+    canReopen(error: unknown): boolean;
+  },
 ): V3SessionCoordinator<T> => {
   let opening: Promise<T> | undefined;
   let refreshing: Promise<T> | undefined;
@@ -58,10 +62,10 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
   const progress = createV3Progress();
   let reporter = progress.begin();
   let observedScope: string | undefined;
-  const prepare = (refresh: boolean) => {
+  const prepare = (refresh: boolean, openSession = open) => {
     // Reserve the flight before publishing: even a reentrant observer must share it.
     let attempt: ReturnType<V3Progress['begin']>;
-    const pending = Promise.resolve().then(() => open(refresh, attempt.metric))
+    const pending = Promise.resolve().then(() => openSession(refresh, attempt.metric))
       .catch(error => { attempt.fail(); throw error; });
     // A refresh already owns its outer shared flight while it verifies the cache.
     if (!refresh) { opening = pending; generation++; }
@@ -69,7 +73,7 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
     attempt = reporter;
     return pending;
   };
-  const get = async (refresh = false) => {
+  const get = async (refresh = false, allowRecovery = true): Promise<T> => {
     const currentScope = scope?.();
     if (currentScope !== observedScope) {
       observedScope = currentScope;
@@ -113,6 +117,24 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
       if (opening === pending && observedScope === currentScope) pendingReporter = reporter;
       pendingReporter.fail();
       if (opening === pending) { opening = undefined; generation++; }
+      if (!refresh && allowRecovery && scope && recovery && scope() === currentScope && recovery.canReopen(error)) {
+        // Only the session read is retried. Reuse a newer owner or reopen the active SQLite snapshot.
+        let current: T | undefined;
+        if (opening) {
+          try {
+            current = await get(false, false);
+          } catch (replacementError) {
+            // A refresh awaiting the retired publication can fail along with it.
+            if (scope() !== currentScope || !recovery.canReopen(replacementError)) throw replacementError;
+          }
+        }
+        if (!current) {
+          if (!opening) prepare(false, recovery.openCached);
+          current = await get(false, false);
+        }
+        if (scope() !== currentScope) throw error;
+        return current;
+      }
       throw error;
     }
   };

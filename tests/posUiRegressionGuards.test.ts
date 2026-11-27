@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { scopedWarehousesForStore, alternativeWarehouseForLines } from '../utils/warehouseScope';
+import { reauthorizationHintText } from '../services/sync/ReauthorizationHint';
 import type { Warehouse } from '../types';
 
 const source = (relative: string) => readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
@@ -180,14 +181,20 @@ test('a transient failure never locks the cashier out of the next attempt', () =
 
 test('un intento sin cobros no se marca en rojo', () => {
   const panel = source('components/FiscalDiagnostics.tsx');
-  // «SIN INTENTO» no es un problema: la fila de cobros no debe alarmar sin cobros.
-  assert.match(panel, /ok: \/sin intento\|DECLINED\/i\.test\(snapshot\.payments/);
+  // «sin pagos»/«SIN INTENTO» no es un problema: la fila de cobros del intento no debe alarmar sin cobros.
+  assert.match(panel, /\{ label: 'Cobros ligados al intento', value: snapshot\.payments/);
+  assert.match(panel, /ok: \/\^\(sin pagos\|sin intento\)\$\/i\.test\(snapshot\.payments/);
+  // Los intents del proveedor conservan su propia fila: DECLINED no es dinero y no se pinta en rojo.
+  assert.match(panel, /\{ label: 'Payment intents', value: snapshot\.paymentIntents/);
+  assert.match(panel, /ok: \/sin intento\|DECLINED\/i\.test\(snapshot\.paymentIntents/);
 });
 
 test('el cierre de un intento con cobros pide autorización de supervisor al ERP', () => {
   const panel = source('components/FiscalDiagnostics.tsx');
   // Un intento con cobros ligados no se cierra sin PIN: el ERP exige operador autorizado.
-  assert.match(panel, /const hasPayments = !\/sin intentos de pago\/i\.test\(snapshot\?\.payments/);
+  assert.match(panel, /const hasPayments = !\/\^sin pagos\$\/i\.test\(snapshot\?\.payments \|\| 'sin pagos'\)/);
+  // Y los intents del proveedor también cuentan: un intento no DECLINED impide liberar sin PIN.
+  assert.match(panel, /!\/sin intentos de pago\/i\.test\(snapshot\?\.paymentIntents \|\| 'sin intentos de pago'\)/);
   // La liberación de emergencia se ofrece salvo que el ERP apunte a un documento emitido.
   assert.match(panel, /const documented = \/COMPROBANTE\|DOCUMENT\|EFFECT\|ISSUED\|BORN\|EMITIDO\/i\.test\(outcome\.note\)/);
   assert.match(panel, /setReleaseOffered\(!outcome\.cancelled && !documented\)/);
@@ -341,7 +348,7 @@ test('el runbook de cierre fiscal describe las mismas salidas que la caja', asyn
   const runbook = readFileSync(new URL('../docs/FISCAL_INTENT_CLOSURE_RUNBOOK.md', import.meta.url), 'utf8');
   const panel = source('components/FiscalDiagnostics.tsx');
   // Las etiquetas del diagnóstico que el runbook manda mirar existen en el panel.
-  for (const label of ['Cobros ligados al intento', 'Retiro fiscal en el ERP', 'Intento fiscal guardado']) {
+  for (const label of ['Cobros ligados al intento', 'Payment intents', 'Comprobantes locales', 'Motivo de la reserva', 'Retiro fiscal en el ERP', 'Intento fiscal guardado']) {
     assert.ok(panel.includes(label), label);
     assert.ok(runbook.includes(label), label);
   }
@@ -463,4 +470,31 @@ test('refund errors never assert issuance outcome or instruct replacing the orig
   assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH')), /Ya existe una nota de crédito/i);
   assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_RETAINED_OWNER_REQUIRED')), /inventario de hoy/i);
   assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED')), /sí se pueden emitir/i);
+});
+
+test('la reautorización diferida conserva el motivo accionable en la tarjeta y no muestra "Tokens vigentes"', () => {
+  const deferred = {
+    ok: false,
+    deferred: true,
+    pendingPushEvents: 3,
+    message: 'No se reautorizó: 3 evento(s) de ventas offline siguen pendientes de empujar al ERP. Se prioriza el outbox y NO se rota la autoridad fiscal para no revocar la reserva que respalda esas ventas; reintenta en cuanto el outbox drene.',
+  } as const;
+  const deferredHint = reauthorizationHintText(deferred, { required: false, reason: '' });
+  assert.equal(deferredHint, deferred.message, 'a deferred run keeps its actionable message');
+  assert.match(deferredHint, /NO se rota la autoridad fiscal/);
+  assert.doesNotMatch(deferredHint, /Tokens vigentes/);
+  // Even with a still-required pairing state, the deferred reason must win over the generic hint.
+  assert.equal(reauthorizationHintText(deferred, { required: true, reason: 'Token vencido' }), deferred.message);
+  // A successful reauthorization keeps the previous hint contract.
+  assert.equal(reauthorizationHintText({ ok: true, message: 'Terminal reautorizada.' }, { required: true, reason: 'Token vencido' }), 'Requerido: Token vencido');
+  assert.equal(reauthorizationHintText({ ok: true, message: 'Terminal reautorizada.' }, { required: false, reason: '' }), 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+  // The settings handler cannot overwrite the non-ok message in the same tick.
+  const settings = source('components/Settings.tsx');
+  const start = settings.indexOf('const handleReauthorize = async');
+  const end = settings.indexOf('const renderContent =', start);
+  assert.ok(start > 0 && end > start, 'reauthorization handler found');
+  const handler = settings.slice(start, end);
+  assert.match(handler, /setReauthorizationHint\(reauthorizationHintText\(result, needsTerminalReauthorization\(\)\)\)/);
+  assert.doesNotMatch(handler, /Tokens vigentes · renovar solo si el cobro fiscal falla/);
+  assert.equal((handler.match(/setReauthorizationHint\(/g) || []).length, 1, 'the hint is set exactly once per attempt');
 });

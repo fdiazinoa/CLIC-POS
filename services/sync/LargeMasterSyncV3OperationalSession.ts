@@ -1,4 +1,6 @@
-import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
+import { markSettingsReturnV3Failure, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
+import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
+import { v3ConfigScopeChangeReason, v3OperationalConfigContext, type V3OperationalAuthorityConfig } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
 import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
 import {resolveSyncTarget} from './SyncProfile';
@@ -18,12 +20,13 @@ import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './LargeMasterSyncV3Canary';
 import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
-import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
+import { readLargeMasterSyncV3BoundIdentity, validatedLargeMasterSyncV3ErpSyncBase, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
+import { isDegradableOfflineIdentityFailure } from '../fiscal/OfflineFiscalFailurePolicy';
 import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, isLargeMasterSyncV3Stale, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
-import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store, type LargeMasterSyncV3IdentityReadContext } from './LargeMasterSyncV3Types';
+import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store, type LargeMasterSyncV3InventoryAuthority, type LargeMasterSyncV3IdentityReadContext } from './LargeMasterSyncV3Types';
 import { requiresV3SaleAvailability, type V3FinancialIntent } from './LargeMasterSyncV3RefundAuthority';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { validateV3PinnedLineSource } from './LargeMasterSyncV3LineSource';
@@ -43,7 +46,25 @@ export type V3CodeMatch = { product: Product; quantity: number; price: number; m
 /** A credit note was issued with a tax classification that the current master no longer declares. */
 export type V3TaxClassificationNotice = { taxId: string; before: string; after: string | null };
 
+// Only scope comparisons use this projection. Legacy layouts still go through the full decoder.
+const readOperationalConfigScope = (source: 'open' | 'identity' | 'acquire' | 'publish' | 'assertCurrent') =>
+  measureSettingsReturnQa(`v3.authority.configScope.${source}`, async (): Promise<V3OperationalAuthorityConfig> =>
+    await dbAdapter.readV3OperationalAuthorityConfig?.() ?? await db.get('config') as unknown as BusinessConfig);
+
 const configContextFlights = new Map<string, Promise<LargeMasterSyncV3OperationalSession>>();
+const errorCode=(error:unknown)=>(error as {code?:string})?.code||(error instanceof Error?error.message:String(error));
+/** The fiscal guard can be unavailable offline while the terminal identity is still perfectly readable
+ * from the persisted config. This fallback NEVER authorizes issuance: the fiscal checkout keeps its own
+ * fail-closed reserve, so the catalog/UI can stay usable with a warning instead of a fatal banner. */
+const offlineIdentityFallback=(config:BusinessConfig|null|undefined):V3LocalOperationalIdentity|null=>{
+ if(!config?.terminals?.length)return null;
+ const target=resolveSyncTarget();
+ if(target.kind!=='ERP_ACTIVE'||target.useLocalTarget||!target.baseUrl)return null;
+ const terminal=config.terminals.find(row=>String(row.config?.erpTerminalId||row.id)===String(target.terminalId));
+ const binding=terminal?.config?.erpBinding,deviceId=terminal?.config?.currentDeviceId;
+ if(!binding?.tenantId||!binding.companyId||!binding.storeId||!deviceId)return null;
+ try{return {tenantId:binding.tenantId,terminalId:String(target.terminalId),deviceId,erpSyncBaseUrl:validatedLargeMasterSyncV3ErpSyncBase(target.baseUrl)};}catch{return null;}
+};
 
 /** One bound, immutable baseline. ACK never removes local stock movements. */
 export class LargeMasterSyncV3OperationalSession {
@@ -56,6 +77,9 @@ export class LargeMasterSyncV3OperationalSession {
     private offlineAuthority?:V3OfflineOperationalAuthority,
     private readonly expectedConfigScope?:string,
     private readonly setupCredentialGuard?:string,
+    /** Set when the catalog opened with the configured local identity because the fiscal guard could not
+     * be read offline. It is a warning for the cashier, never an authorization to emit. */
+    readonly offlineDegradedNotice?:string,
   ) {}
 
   async trackingOwner(){
@@ -73,21 +97,29 @@ export class LargeMasterSyncV3OperationalSession {
     assertLargeMasterSyncV3NativeAndroid();
     const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
     let identity:V3LocalOperationalIdentity,offlineAuthority:V3OfflineOperationalAuthority|undefined;
-    try{identity=readLargeMasterSyncV3BoundIdentity();}catch(error){try{offlineAuthority=await readOfflineV3OperationalAuthority();identity=offlineAuthority.identity;}catch{throw error;}}
+    let offlineDegradedNotice:string|undefined;
+    try{identity=readLargeMasterSyncV3BoundIdentity();}catch(error){try{offlineAuthority=await readOfflineV3OperationalAuthority();identity=offlineAuthority.identity;}catch(offlineError){const code=errorCode(offlineError);const fallback=isDegradableOfflineIdentityFailure(code)?offlineIdentityFallback(await db.get('config') as unknown as BusinessConfig):null;if(!fallback)throw offlineError;identity=fallback;offlineDegradedNotice=code;}}
     const binding = v3BindingKey(identity, v3BaseUrl);
     const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
-    const configScope = (config: BusinessConfig) => v3OperationalConfigContext(config, identity).scope;
-    const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const configScope = (config: V3OperationalAuthorityConfig) => v3OperationalConfigContext(config, identity).scope;
+    const expectedScope = configScope(await readOperationalConfigScope('open'));
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
-      const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
+      const currentScope=configScope(owned ? await owned.readConfig() : await readOperationalConfigScope('identity'));
       if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'ORIGIN');
-      if(currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+      if (currentScope !== expectedScope) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, v3ConfigScopeChangeReason(expectedScope, currentScope));
+      }
       try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CREDENTIAL');}
       catch(error){
         // Download/activation owns its SQL connection and retains live transport authority.
         if(owned)throw error;
-        let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch{throw error;}
+        let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch{
+          // The degraded local identity was already checked against the config scope above; it may only
+          // keep the catalog open, so it is accepted here without granting fiscal authority.
+          if(offlineDegradedNotice&&v3BindingKey(identity,v3BaseUrl)===binding)return;
+          throw error;
+        }
         if(v3BindingKey(local.identity,v3BaseUrl)!==binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
         offlineAuthority=local;
       }
@@ -145,7 +177,7 @@ export class LargeMasterSyncV3OperationalSession {
     } else {
       observe({ event: 'setup_phase', phase: 'cached' });
     }
-    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope,credentialGuard);
+    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope,credentialGuard,offlineDegradedNotice);
   }
 
   /** Renew only the UI read context. Never downloads, changes the old session, or retries a sale. */
@@ -156,7 +188,17 @@ export class LargeMasterSyncV3OperationalSession {
       const origin = largeMasterSyncV3DownloadOrigin();
       let identity: V3LocalOperationalIdentity, mode: 'bound' | 'offline';
       try { identity = readLargeMasterSyncV3BoundIdentity(); mode = 'bound'; }
-      catch { identity = (await readOfflineV3OperationalAuthority()).identity; mode = 'offline'; }
+      catch {
+        try { identity = (await readOfflineV3OperationalAuthority()).identity; mode = 'offline'; }
+        catch (offlineError) {
+          // Same non-blocking fallback as `open`: only a local session/transport/reserve-reconciliation
+          // fault may open the catalog; the fiscal identity itself is never relaxed here.
+          const code = errorCode(offlineError);
+          const fallback = isDegradableOfflineIdentityFailure(code) ? offlineIdentityFallback(config) : null;
+          if (!fallback) throw offlineError;
+          identity = fallback; mode = 'offline';
+        }
+      }
       const proof = readOperationalCatalogBindingProof();
       const canonical = v3OperationalConfigContext(config, { localTerminalId, ...identity });
       if (!proof || proof.companyId !== canonical.terminal.config.erpBinding?.companyId
@@ -171,7 +213,7 @@ export class LargeMasterSyncV3OperationalSession {
     let pending = configContextFlights.get(key);
     if (!pending) {
       pending = (async () => {
-        const persisted = await db.get('config') as unknown as BusinessConfig;
+        const persisted = await readOperationalConfigScope('acquire');
         if (v3OperationalConfigContext(persisted, { localTerminalId, ...authority.identity }).scope !== requested.scope)
           throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
         await dbAdapter.connect();
@@ -195,7 +237,7 @@ export class LargeMasterSyncV3OperationalSession {
         await session.assertCurrent();
         const assertPublicationAuthority = async () => {
           if (JSON.stringify(await readAuthority()) !== JSON.stringify(authority)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-          const current = await db.get('config') as unknown as BusinessConfig;
+          const current = await readOperationalConfigScope('publish');
           if (v3OperationalConfigContext(current, { localTerminalId, ...authority.identity }).scope !== requested.scope)
             throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
           if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
@@ -238,34 +280,79 @@ export class LargeMasterSyncV3OperationalSession {
     }
   }
 
-  async assertCurrent(): Promise<void> {
+  async assertCurrent(add?: { trace: PosInteractionTrace; recheck?: boolean }): Promise<void> {
+    await this.readCurrentAuthority(add);
+  }
+
+  private async readCurrentAuthority(
+    add?: { trace: PosInteractionTrace; recheck?: boolean },
+    expectedInventory?: LargeMasterSyncV3InventoryAuthority,
+  ): Promise<LargeMasterSyncV3InventoryAuthority | undefined> {
     assertLargeMasterSyncV3NativeAndroid();
     try{
       const current=readLargeMasterSyncV3BoundIdentity();
       if(v3BindingKey(current,this.v3BaseUrl)!==this.binding||current.syncToken!==this.identity.syncToken)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=undefined;
     }catch(error){
-      let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch{throw error;}
+      let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch(offlineError){
+        // A degraded session keeps the catalog alive: report the local reserve reason (which the POS
+        // degrades to a warning only when a valid reserve exists) instead of the transport error.
+        if(this.offlineDegradedNotice&&isDegradableOfflineIdentityFailure(errorCode(offlineError)))throw offlineError;
+        throw error;
+      }
       if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       this.offlineAuthority=local;
     }
-    if(this.expectedConfigScope!==undefined){
-    const config=await db.get('config') as unknown as BusinessConfig;
-    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
-    }
-    const { active, inventory, owner } = this.store.readOperationalSnapshot
-      ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
+    const assertConfig = (config: V3OperationalAuthorityConfig) => {
+      try {
+        const currentScope = v3OperationalConfigContext(config, this.identity).scope;
+        if (currentScope !== this.expectedConfigScope) {
+          const reason = v3ConfigScopeChangeReason(this.expectedConfigScope!, currentScope);
+          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, reason);
+        }
+      } catch (error) {
+        if (add) markSettingsReturnV3Failure(add.recheck ? 'add-recheck-config' : 'add-initial-config', error);
+        throw error;
+      }
+    };
+    const readSnapshot = async (): ReturnType<NonNullable<LargeMasterSyncV3Store['readOperationalSnapshot']>> => this.store.readOperationalSnapshot
+      ? this.store.readOperationalSnapshot(this.ready.runtime.version)
       : {
         active: await this.store.getActiveRuntimeVersion(),
         inventory: await this.ready.runtime.getInventorySnapshotVersion(),
         owner: await this.store.getOperationalOwner!(),
       };
+    const readAuthority = async () => {
+      const scopeRequired = this.expectedConfigScope !== undefined;
+      const stage = add?.recheck ? 'ADD_RECHECK' : 'ADD_AUTHORITY';
+      if (scopeRequired && add && dbAdapter.readV3OperationalAuthority) {
+        return dbAdapter.readV3OperationalAuthority(this.ready.runtime.version, assertConfig,
+          point => markInteractionStage(add.trace, `${stage}_${point}`));
+      }
+
+      if (scopeRequired) {
+        const checkConfig = async () => {
+          assertConfig(await readOperationalConfigScope('assertCurrent'));
+        };
+        if (add) await measureInteractionStage(add.trace, `${stage}_CONFIG_START`, `${stage}_CONFIG_END`, checkConfig);
+        else await checkConfig();
+      }
+      return add ? measureInteractionStage(add.trace, `${stage}_SNAPSHOT_START`, `${stage}_SNAPSHOT_END`, readSnapshot)
+        : readSnapshot();
+    };
+    const { active, inventory, owner, inventoryAuthority } = await readAuthority();
     if (active?.syncId !== this.ready.runtime.version.syncId
       || active.syncVersion !== this.ready.runtime.version.syncVersion
       || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor
       || owner?.binding !== this.binding || owner.syncId !== active.syncId || owner.syncVersion !== active.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
     }
+    if (expectedInventory && (!inventoryAuthority || inventoryAuthority.syncId !== expectedInventory.syncId
+      || inventoryAuthority.syncVersion !== expectedInventory.syncVersion
+      || inventoryAuthority.version !== expectedInventory.version || inventoryAuthority.cursor !== expectedInventory.cursor)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+    }
+    return inventoryAuthority ?? undefined;
   }
 
   /** Pairing-only synchronous guard. Raw credentials/profile include the captured company/tenant/device/token.
@@ -412,11 +499,19 @@ export class LargeMasterSyncV3OperationalSession {
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
     intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false,
-    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void): Promise<V3RetainedContext | undefined> {
-    await this.assertCurrent();
+    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void, addTrace?: PosInteractionTrace): Promise<V3RetainedContext | undefined> {
+    let initialInventory: LargeMasterSyncV3InventoryAuthority | undefined;
+    if (addTrace) initialInventory = await measureInteractionStage(addTrace, 'ADD_AUTHORITY_START', 'ADD_AUTHORITY_END',
+      () => this.readCurrentAuthority({ trace: addTrace }));
+    else await this.assertCurrent();
+    const prepare = <T>(step: 'ADD_PRESENTATION_PROOF' | 'ADD_RETAINED_SOURCE' | 'ADD_INVENTORY_ANCHOR' | 'ADD_CATALOG_OPEN', read: () => T | Promise<T>) =>
+      addTrace ? measureInteractionStage(addTrace, `${step}_START`, `${step}_END`, read) : read();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
-    let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
-    if(!fiscalDeliveryOnly&&lines.some(line=>line.inventoryPresentation!==undefined)){if(intent==='REFUND')throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');presentationProof=await this.presentationProof(config,lines);}
+    let presentationProof: Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
+    if (!fiscalDeliveryOnly && lines.some(line => line.inventoryPresentation !== undefined)) {
+      if (intent === 'REFUND') throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');
+      presentationProof = await prepare('ADD_PRESENTATION_PROOF', () => this.presentationProof(config, lines));
+    }
     const authority = lines[0].v3SaleAuthority;
     const refund = intent === 'REFUND';
     // A credit note reverses the invoice as issued, so the ticket's own inventory authority is the
@@ -425,16 +520,36 @@ export class LargeMasterSyncV3OperationalSession {
       || authority.tariffId !== tariffId
       || (!refund && (authority.inventoryVersion !== this.ready.inventoryVersion
         || authority.inventoryCursor !== this.ready.inventoryCursor))) throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
-    const retained = await readV3RetainedCheckout(reference, refund);
+    const retained = await prepare('ADD_RETAINED_SOURCE', () => readV3RetainedCheckout(reference, refund));
     if (retained?.reservation) { assertV3ReservationSource(retained.reservation,this.binding,warehouseId); assertV3ReservationLines(retained.reservation,lines); validateV3ReservationPricing(retained.reservation,config); }
-    const anchor = refund ? v3RefundAnchor(authority!) : (await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
-      syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
-      version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor });
-    const currentCatalog = await this.catalogAfterAssert(tariffId, warehouseId);
+    const reusableInventory = !refund && !retained && !fiscalDeliveryOnly ? initialInventory : undefined;
+    const anchor = await prepare('ADD_INVENTORY_ANCHOR', async () => {
+      if (refund) return v3RefundAnchor(authority);
+      if (reusableInventory) {
+        markInteractionStage(addTrace, 'ADD_INVENTORY_ANCHOR_REUSED');
+        return reusableInventory;
+      }
+      return await this.store.getInventoryAuthority?.() || {
+        syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
+        syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
+        version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor,
+      };
+    });
+    const currentCatalog = await prepare('ADD_CATALOG_OPEN', () => this.catalogAfterAssert(tariffId, warehouseId));
+    // Reuse reads only inside this validation. Each line still checks its own authority and price.
+    const currentArticles = new Map<string, ReturnType<typeof currentCatalog.get>>();
+    const readCurrentArticle = (id: string, trace?: PosInteractionTrace) => {
+      let article = currentArticles.get(id);
+      if (!article) {
+        article = currentCatalog.get(id, trace, !!addTrace && !refund && !retained && !fiscalDeliveryOnly);
+        currentArticles.set(id, article);
+      }
+      return article;
+    };
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
     let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
     const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();
-    const sourceFor = async (line: CartItem) => {
+    const sourceFor = async (line: CartItem, trace?: PosInteractionTrace) => {
       const stamp = line.v3SaleAuthority;
       if (!stamp || stamp.binding !== this.binding || stamp.warehouseId !== warehouseId || stamp.tariffId !== tariffId
         || stamp.taxIncluded !== authority.taxIncluded || !sameV3StockAuthority(stamp, anchor)) {
@@ -443,7 +558,7 @@ export class LargeMasterSyncV3OperationalSession {
       // A refund is authorized by the independently read original even when its catalog is still current.
       if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
-        return currentCatalog.get(line.id);
+        return readCurrentArticle(line.id, trace);
       }
       if (!refund) assertV3RetainedLine(line, retained);
       // Delivery of an already committed invoice is distinct from a new sale/refund checkout.
@@ -473,7 +588,7 @@ export class LargeMasterSyncV3OperationalSession {
         runtime: LargeMasterSyncV3Runtime.retained(this.store, { syncId: stamp.syncId, syncVersion: stamp.syncVersion, contractVersion: 2 }),
         inventoryVersion: anchor.version, inventoryCursor: anchor.cursor,
         inventorySyncId: anchor.syncId, inventorySyncVersion: anchor.syncVersion }, tariffId, warehouseId));
-      return sourceCatalogs.get(key)!.get(line.id);
+      return sourceCatalogs.get(key)!.get(line.id, trace);
     };
     // Only an independently read retained account permits mixed source generations.
     const fiscalLines = retained ? lines.map(line => ({ ...line, v3SaleAuthority: authority })) : lines;
@@ -484,8 +599,11 @@ export class LargeMasterSyncV3OperationalSession {
       const stamp = line.v3SaleAuthority;
       const currentGeneration = stamp?.syncId === this.ready.runtime.version.syncId
         && stamp.syncVersion === this.ready.runtime.version.syncVersion;
-      const source = await sourceFor(line);
-      const current = currentGeneration ? source : await currentCatalog.get(line.id);
+      // Trace the first line's reads with the same route the validator already uses.
+      const source = addTrace && addTrace.stages.ADD_CATALOG_READ_START === undefined
+        ? await measureInteractionStage(addTrace, 'ADD_CATALOG_READ_START', 'ADD_CATALOG_READ_END', () => sourceFor(line, addTrace))
+        : await sourceFor(line);
+      const current = currentGeneration ? source : await readCurrentArticle(line.id);
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
@@ -502,11 +620,15 @@ export class LargeMasterSyncV3OperationalSession {
       if (source.product.type !== 'SERVICE' && source.product.isInventoriable === true
         && requiresV3SaleAvailability(intent, source.product.operationalFlags?.trackInventory === true,
         source.product.operationalFlags?.allowNegativeStock === true)) {
-        const stock=await this.withStock(source.product,warehouseId);
+        const stock = addTrace && addTrace.stages.ADD_STOCK_READ_START === undefined
+          ? await measureInteractionStage(addTrace, 'ADD_STOCK_READ_START', 'ADD_STOCK_READ_END', () => this.withStock(source.product, warehouseId))
+          : await this.withStock(source.product, warehouseId);
         if((demand.get(line.id) || 0)>stock.stock)throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
       }
     }
-    await this.assertCurrent();
+    if (addTrace) await measureInteractionStage(addTrace, 'ADD_RECHECK_START', 'ADD_RECHECK_END',
+      () => this.readCurrentAuthority({ trace: addTrace, recheck: true }, reusableInventory));
+    else await this.assertCurrent();
     return retained;
   }
 
@@ -539,25 +661,41 @@ export class LargeMasterSyncV3OperationalSession {
   }
 }
 
+const readSessionScope = () => {
+  const proof = readOperationalCatalogBindingProof();
+  const origin = largeMasterSyncV3DownloadOrigin();
+  try {
+    const identity = readLargeMasterSyncV3BoundIdentity();
+    return JSON.stringify([v3BindingKey(identity, origin), identity.syncToken, proof]);
+  } catch {
+    return JSON.stringify(['offline-observation', proof, resolveSyncTarget().baseUrl, origin]);
+  }
+};
+
+const openCachedSession = (_refresh: boolean, metric?: (metric: LargeMasterSyncV3Metric) => void) =>
+  LargeMasterSyncV3OperationalSession.open(false, metric, true);
+
+export const isRecoverableV3SessionRead = (error: unknown): boolean => {
+  const failure = error as Partial<LargeMasterSyncV3Error> | null;
+  return failure?.code === 'SYNC_V3_UI_CONTEXT_CHANGED' || failure?.code === 'SYNC_V3_RUNTIME_VERSION_CHANGED'
+    || (failure?.code === 'SYNC_V3_BINDING_CHANGED' && failure.bindingReason === 'CONFIG_SCOPE');
+};
+
+const cachedSessionRecovery = { openCached: openCachedSession, canReopen: isRecoverableV3SessionRead };
 export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
   (refresh, metric) => LargeMasterSyncV3OperationalSession.open(refresh, metric),
-  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
-    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
+  readSessionScope,
+  cachedSessionRecovery,
 );
 
 /** Reversal path: reuse the active runtime and never negotiate a master. A credit note reverses a
  * document that was already issued, so refreshing the catalog must never decide whether it prints.
- * Its coordinator cache is independent from the operational one, so a sync that moved the runtime
- * makes the first call fail closed; that single case reopens once instead of surfacing a raw code. */
-const retainedSessionCoordinator = createLargeMasterSyncV3SessionCoordinator(
-  (_refresh, metric) => LargeMasterSyncV3OperationalSession.open(false, metric, true),
-  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
-    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
+ * Its separate cache may reopen the active SQLite snapshot when the runtime or config moves. */
+export const getLargeMasterSyncV3RetainedSession = createLargeMasterSyncV3SessionCoordinator(
+  openCachedSession,
+  readSessionScope,
+  cachedSessionRecovery,
 );
-export const getLargeMasterSyncV3RetainedSession = ((refresh?: boolean) => retainedSessionCoordinator(refresh).catch(error => {
-  if ((error as { code?: string })?.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED') throw error;
-  return retainedSessionCoordinator(refresh);
-})) as typeof retainedSessionCoordinator;
 
 export const acquireLargeMasterSyncV3ConfigContext = (config: BusinessConfig, localTerminalId: string) =>
   LargeMasterSyncV3OperationalSession.acquireConfigContext(config, localTerminalId);

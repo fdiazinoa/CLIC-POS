@@ -4,8 +4,10 @@ import './index.css';
 import App from './App';
 import ClicDialogHost from './components/system/ClicDialogHost';
 import { installNativeAlertBridge } from './services/dialog/ClicDialogService';
+import { initDeviceCapabilityShadow } from './services/performance/deviceCapability';
 
 installNativeAlertBridge();
+void initDeviceCapabilityShadow();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

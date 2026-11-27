@@ -18,7 +18,12 @@ export async function readOfflineV3OperationalAuthority():Promise<V3OfflineOpera
  // In particular, a newly downloaded/revoked V2 grant cannot replace a historical V1 paid intent.
  if(current?.phase==='EFFECT_POSSIBLE'&&!current.paymentIds.length)throw new LargeMasterSyncV3Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
  if(current&&['PREPARED','EFFECT_POSSIBLE'].includes(current.phase)&&(current.allocation||current.permit?.leaseId||current.paymentIds.length)){
-  if(current.offlineBindingHash!==authority.bindingHash)throw new LargeMasterSyncV3Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  // Current identity hash, or a legacy hash proven by this same downloaded reserve (older builds
+  // mixed the rotating device token into it); a genuine identity change has no valid reserve here.
+  if(current.offlineBindingHash!==authority.bindingHash){
+   const compatible=store.offlineBindingCompatible?await store.offlineBindingCompatible(current.offlineBindingHash,authority).catch(()=>false):false;
+   if(!compatible)throw new LargeMasterSyncV3Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  }
   const possible=current.phase==='EFFECT_POSSIBLE'&&current.paymentIds.length>0;
   if(current.allocation){
    if(current.permit?.leaseId||!store.allocationDraft)throw new LargeMasterSyncV3Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');

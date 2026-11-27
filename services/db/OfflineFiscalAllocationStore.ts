@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import {issuedBaseLine} from '../dispatch/IssuedDispatchBaseLine';
 import {canonicalDispatchJSON} from './CompanyDispatchEscrowStore';
 import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../fiscal/DopFiscalSettlement';
@@ -8,10 +9,11 @@ import type {BusinessConfig,FiscalAllocation,FiscalRangeDGII,LocalFiscalBuffer,T
 import type {FiscalWorkflowCheckoutV2} from '../fiscal/FiscalWorkflowV2Types';
 import {fiscalWorkflowScopeKey} from '../fiscal/FiscalWorkflowV2Types';
 import type {OfflineFiscalLocalAuthority,TableFiscalSaleContext} from '../fiscal/OfflineFiscalLease';
-import {validateTableFiscalSaleContext} from '../fiscal/OfflineFiscalLease';
+import {validateTableFiscalSaleContext,offlineFiscalRecordIdentityMatches} from '../fiscal/OfflineFiscalLease';
 import {allocationFail,validateOfflineFiscalAllocation,assertAllocationMemberTime,type OfflineFiscalAllocation,type OfflineFiscalAllocationMember,type OfflineFiscalAllocationSelection} from '../fiscal/OfflineFiscalAllocation';
 import {offlineFiscalAuthorityFromConfig} from '../fiscal/OfflineFiscalLeaseContext';
 import {createUuid} from '../../utils/uuid';
+import {recordCheckoutTrace} from '../audit/CheckoutTrace';
 import {formatFiscalNumber} from '../../utils/fiscalNumber';
 import {fiscalIssuerRnc,snapshotFiscalIssuance} from '../../utils/fiscalIssuance';
 import {validateFiscalBufferReservation} from '../../utils/fiscalBufferAuthority';
@@ -72,7 +74,25 @@ CREATE TRIGGER IF NOT EXISTS pos_allocation_range_revoke_update_v2 AFTER UPDATE 
 CREATE TRIGGER IF NOT EXISTS pos_allocation_member_revoke_update_v2 AFTER UPDATE ON documents WHEN NEW.collection_name='fiscalAllocations' BEGIN UPDATE pos_offline_fiscal_allocations_v2 SET revoked=1 WHERE revoked=0 AND EXISTS(SELECT 1 FROM json_each(authority_json,'$.allocations') m WHERE json_extract(m.value,'$.allocationId')=NEW.doc_id AND (json_extract(NEW.data,'$.status') NOT IN('ACTIVE','EXHAUSTED') OR json_extract(NEW.data,'$.releasedAt') IS NOT NULL OR json_extract(NEW.data,'$.terminalId') IS NOT json_extract(authority_json,'$.scope.terminalId') OR json_extract(NEW.data,'$.fiscalRangeId') IS NOT json_extract(m.value,'$.fiscalRangeId') OR json_extract(NEW.data,'$.ncfType') IS NOT json_extract(m.value,'$.ncfType') OR json_extract(NEW.data,'$.reservedStart') IS NOT json_extract(m.value,'$.start') OR json_extract(NEW.data,'$.reservedEnd') IS NOT json_extract(m.value,'$.end')));END;
 `;
 const row=async(sql:SQL,query:string,params:any[]=[])=> (await sql.query(query,params)).values?.[0];
+/** Support trace of a quarantined grant, once per cause; never mutates fiscal storage. */
+let lastQuarantineTrace='';
+const traceQuarantine=(code:string)=>{if(lastQuarantineTrace===code)return;lastQuarantineTrace=code;try{recordCheckoutTrace('OFFLINE_RESERVE_QUARANTINED',`allocation ${code}`);}catch{/* best effort */}};
 const document=async<T>(sql:SQL,name:string,id:string):Promise<T>=>{const value=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[name,id]);if(!value)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');return JSON.parse(value.data);};
+
+async function readAllocationDocuments(sql: SQL, keys: readonly (readonly [string, string])[]) {
+ const result = await sql.query(
+  `SELECT collection_name, data FROM documents WHERE ${keys.map(() => '(collection_name=? AND doc_id=?)').join(' OR ')}`,
+  keys.flat(),
+ );
+ // Each batch requests at most one document per collection.
+ return new Map<string, string>((result.values || []).map(value => [value.collection_name, value.data]));
+}
+
+function requireAllocationDocument<T>(data: string | undefined): T {
+ if (data === undefined) allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+ return JSON.parse(data);
+}
+
 
 async function assertDirectAllocationCharge(sql:SQL,cart:any,local:OfflineFiscalLocalAuthority):Promise<void>{
  if(cart.fiscalSaleContext||cart.serviceChargeAmount===undefined||cart.serviceChargeAmount===0)return;
@@ -89,18 +109,29 @@ export async function saveAllocation(sql:SQL,value:OfflineFiscalAllocation,local
  await validateOfflineFiscalAllocation(value,local);const now=Date.now(),server=Date.parse(serverTime);
  if(!Number.isFinite(server)||server<Date.parse(value.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
  const previous=await row(sql,'SELECT * FROM pos_offline_fiscal_allocations_v2 WHERE authorization_id=?',[value.authorizationId]);
- if(previous){if(previous.authority_json!==JSON.stringify(value)||previous.binding_hash!==local.bindingHash||previous.revoked)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');return;}
+ if(previous){if(previous.authority_json!==JSON.stringify(value)||previous.revoked)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
+  // A grant downloaded by an older build carries a hash that mixed the rotating token; the same
+  // fiscal identity keeps it valid, and the immutable row is never rewritten.
+  if(previous.binding_hash!==local.bindingHash&&!offlineFiscalRecordIdentityMatches(local,value))allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');return;}
  await sql.run("UPDATE pos_offline_fiscal_allocations_v2 SET revoked=1 WHERE scope_key=? AND authorization_id<>? AND (binding_hash<>? OR json_extract(authority_json,'$.bindingFingerprint')<>? OR EXISTS(SELECT 1 FROM json_each(authority_json,'$.allocations') old WHERE NOT EXISTS(SELECT 1 FROM json_each(?) incoming WHERE json_extract(old.value,'$.allocationId') IS json_extract(incoming.value,'$.allocationId') AND json_extract(old.value,'$.fiscalRangeId') IS json_extract(incoming.value,'$.fiscalRangeId') AND json_extract(old.value,'$.ncfType') IS json_extract(incoming.value,'$.ncfType') AND json_extract(old.value,'$.prefix') IS json_extract(incoming.value,'$.prefix') AND json_extract(old.value,'$.padding') IS json_extract(incoming.value,'$.padding') AND json_extract(old.value,'$.start') IS json_extract(incoming.value,'$.start') AND json_extract(old.value,'$.end') IS json_extract(incoming.value,'$.end') AND json_extract(old.value,'$.rangeStart') IS json_extract(incoming.value,'$.rangeStart') AND json_extract(old.value,'$.rangeEnd') IS json_extract(incoming.value,'$.rangeEnd') AND json_extract(old.value,'$.expiryDate') IS json_extract(incoming.value,'$.expiryDate'))))",[fiscalWorkflowScopeKey(local.scope),value.authorizationId,local.bindingHash,value.bindingFingerprint,JSON.stringify(value.allocations)],false);
  await sql.run('INSERT INTO pos_offline_fiscal_allocations_v2(authorization_id,scope_key,authority_json,binding_hash,server_offset_ms,max_local_ms)VALUES(?,?,?,?,?,?)',[value.authorizationId,fiscalWorkflowScopeKey(local.scope),JSON.stringify(value),local.bindingHash,server-now,now],false);
 }
-export async function readAllocation(sql:SQL,local:OfflineFiscalLocalAuthority,id?:string,recovery=false):Promise<{authority:OfflineFiscalAllocation;now:number}|null>{
+/** Pure read by default: `advanceClock` is only set by the checkout/commit paths. A grant whose fiscal
+ * identity differs from the current one is quarantined in memory instead of being revoked here. */
+export async function readAllocation(sql:SQL,local:OfflineFiscalLocalAuthority,id?:string,recovery=false,advanceClock=false):Promise<{authority:OfflineFiscalAllocation;now:number;legacyBinding:boolean}|null>{
  const rows=(await sql.query('SELECT * FROM pos_offline_fiscal_allocations_v2 WHERE scope_key=? ORDER BY rowid DESC',[fiscalWorkflowScopeKey(local.scope)])).values||[];
- for(const saved of rows){if(id&&saved.authorization_id!==id)continue;if(saved.binding_hash!==local.bindingHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');if(saved.revoked)allocationFail('OFFLINE_FISCAL_AUTHORITY_REVOKED');
-  const value=JSON.parse(saved.authority_json) as OfflineFiscalAllocation;await validateOfflineFiscalAllocation(value,local);
+ let quarantined=false;
+ for(const saved of rows){if(id&&saved.authorization_id!==id)continue;if(saved.revoked)allocationFail('OFFLINE_FISCAL_AUTHORITY_REVOKED');
+  let value:OfflineFiscalAllocation;try{value=JSON.parse(saved.authority_json) as OfflineFiscalAllocation;}catch{quarantined=true;traceQuarantine('UNREADABLE_ROW');continue;}
+  const legacyBinding=saved.binding_hash!==local.bindingHash;
+  if(legacyBinding&&!offlineFiscalRecordIdentityMatches(local,value)){quarantined=true;traceQuarantine('AUTHORITY_CHANGED');continue;}
+  try{await validateOfflineFiscalAllocation(value,local);}catch(error){if(legacyBinding){quarantined=true;traceQuarantine('OFFLINE_FISCAL_ALLOCATION_INVALID');continue;}throw error;}
   const now=Date.now();if(now<saved.max_local_ms&&!recovery)allocationFail('OFFLINE_FISCAL_CLOCK_ROLLBACK');
-  if(now>=saved.max_local_ms)await sql.run('UPDATE pos_offline_fiscal_allocations_v2 SET max_local_ms=? WHERE authorization_id=?',[now,value.authorizationId],false);
-  return {authority:value,now:now+saved.server_offset_ms};
- }return null;
+  if(advanceClock&&now>=saved.max_local_ms)await sql.run('UPDATE pos_offline_fiscal_allocations_v2 SET max_local_ms=? WHERE authorization_id=?',[now,value.authorizationId],false);
+  return {authority:value,now:now+saved.server_offset_ms,legacyBinding};
+ }
+ if(quarantined)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
+ return null;
 }
 /** Un buffer nuevo nunca puede arrancar por debajo de un NCF que esta caja ya emitió.
  *  El ERP puede sincronizar un nextNumber atrasado (reclamos offline V2 que no movieron
@@ -142,16 +173,27 @@ async function canRestoreRetainedBlockMarker(
 
  return await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix)===buffer.currentNumber;
 }
-export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
+export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string,checkedConfig?:BusinessConfig){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
  if(!members.length)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let expired=false;
- const config=await document<BusinessConfig>(sql,'config','current');
+ const config=checkedConfig ?? await document<BusinessConfig>(sql,'config','current');
  for(const member of members){try{assertAllocationMemberTime(member,time);}catch{expired=true;continue;}
-  const allocation=await document<FiscalAllocation>(sql,'fiscalAllocations',member.allocationId),range=await document<FiscalRangeDGII>(sql,'fiscalRanges',member.fiscalRangeId);
+  const documents = (await measureSettingsReturnQa('fiscal.allocationMemberRead', () => sql.query(`
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='fiscalAllocations' AND doc_id=?
+    UNION ALL
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='fiscalRanges' AND doc_id=?
+    UNION ALL
+    SELECT collection_name, doc_id, data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?
+  `, [member.allocationId, member.fiscalRangeId, member.allocationId]))).values || [];
+  const allocationRow = documents.find(document => document.collection_name === 'fiscalAllocations');
+  const rangeRow = documents.find(document => document.collection_name === 'fiscalRanges');
+  if (!allocationRow || !rangeRow) allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+  const allocation: FiscalAllocation = JSON.parse(allocationRow.data);
+  const range: FiscalRangeDGII = JSON.parse(rangeRow.data);
   if(allocation.terminalId!==authority.scope.terminalId||!['ACTIVE','EXHAUSTED'].includes(allocation.status)||allocation.releasedAt||allocation.reservedStart!==member.start||allocation.reservedEnd!==member.end||allocation.fiscalRangeId!==member.fiscalRangeId||range.isActive!==true||range.type!==type||range.prefix!==member.prefix||range.startNumber!==member.rangeStart||range.endNumber!==member.rangeEnd||(range.expiryDate||null)!==member.expiryDate)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
-  const buffers=(await sql.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
+  const buffers = documents.filter(document => document.collection_name === 'localFiscalBuffer');
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
   const createBuffer=buffers.length===0;
   /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. Sin
@@ -193,7 +235,7 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  if(current){const saved=JSON.parse(current.checkout_json) as FiscalWorkflowCheckoutV2;
   if(saved.phase==='COMMITTED'||saved.phase==='ACKNOWLEDGED'&&saved.operationId===operationId)return saved;
   if(saved.phase==='ACKNOWLEDGED'){await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=?',[key],false);}
-  else if(saved.cartIdentity===cartIdentity&&saved.operationId===operationId&&saved.allocation){await assertAllocationCheckout(sql,saved,saved.phase==='EFFECT_POSSIBLE');return saved;}
+  else if(saved.cartIdentity===cartIdentity&&saved.operationId===operationId&&saved.allocation){await assertAllocationCheckout(sql,saved,saved.phase==='EFFECT_POSSIBLE',true);return saved;}
   else if(saved.allocation&&saved.phase==='PREPARED'&&!saved.paymentIds.length){
    if(JSON.parse(saved.cartIdentity).fiscalType==='E34')allocationFail('FISCAL_RETURN_RECOVERY_REQUIRED');
    await assertRetirementHasNoEffects(sql,{transactionId:saved.transactionId,checkoutId:saved.checkoutId,permitId:saved.checkoutId},{targetedQueues:true});
@@ -202,7 +244,7 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
 
   }else allocationFail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
  }
- const proof=await readAllocation(sql,local);if(!proof)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+ const proof=await readAllocation(sql,local,undefined,false,true);if(!proof)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let cart:any;try{cart=JSON.parse(cartIdentity);}catch{allocationFail();}if(context)validateTableFiscalSaleContext(context);
  if(!Array.isArray(cart.items)||!cart.items.length||cart.items.some((line:any)=>!line.id||!line.cartId||!Number.isFinite(line.quantity)||line.quantity<=0||!Number.isFinite(line.price)||line.price<0||line.articleFormat&&!dispatchJoint||line.recipeDetails?.length)||JSON.stringify(context)!==JSON.stringify(cart.fiscalSaleContext))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
  if(cart.fiscalType==='E34'||cart.documentType==='REFUND'){
@@ -220,17 +262,27 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  await sql.run("INSERT INTO pos_fiscal_checkouts_v2(checkout_id,transaction_id,scope_key,cart_identity,permit_id,checkout_json,phase)VALUES(?,?,?,?,NULL,?,'PREPARED')",[checkout.checkoutId,checkout.transactionId,key,cartIdentity,JSON.stringify(checkout)],false);
  await sql.run('INSERT INTO pos_fiscal_checkout_current_v2(scope_key,checkout_id)VALUES(?,?)',[key,checkout.checkoutId],false);return checkout;
 }
-export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCheckoutV2,recovery=false){
- if(!checkout.allocation)allocationFail();const config=await document<BusinessConfig>(sql,'config','current'),local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery);
+/** Pure by default: only reserving, taking a payment or committing passes `advanceClock=true`, so
+ * diagnostics/readiness/COBRAR guards never advance `max_local_ms`.
+ */
+export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCheckoutV2,recovery=false,advanceClock=false){
+ if(!checkout.allocation)allocationFail();
+ const configRow=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',['config','current']);
+ const config=requireAllocationDocument<BusinessConfig>(configRow?.data);
+ const local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery,advanceClock);
  if(!recovery)await assertDirectAllocationCharge(sql,JSON.parse(checkout.cartIdentity),local);
- if(!proof||proof.authority.authorityHash!==checkout.allocation.authorityHash||checkout.offlineBindingHash!==local.bindingHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
+ if(!proof||proof.authority.authorityHash!==checkout.allocation.authorityHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
+ // A legacy binding hash belongs to the same fiscal identity when the immutable grant/claim just validated
+ // above matches; nothing else re-derives a hash that used to mix the rotating device token.
+ if(checkout.offlineBindingHash!==local.bindingHash&&!proof.legacyBinding)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const claim=await row(sql,'SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?',[checkout.checkoutId]);
  if(!claim||claim.transaction_id!==checkout.transactionId||claim.authorization_id!==proof.authority.authorizationId||claim.environment!==proof.authority.environment||claim.ncf!==checkout.allocation.ncf||claim.sequence!==checkout.allocation.sequence||claim.allocation_id!==checkout.allocation.allocationId||!['PREPARED','EFFECT_POSSIBLE'].includes(claim.state))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
  const at=recovery?Date.parse(checkout.offlineEffectAt||''):proof.now;
  if(!Number.isFinite(at)||at<Date.parse(proof.authority.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
- const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation);
+ // This caller holds the same native transaction through selection and validation.
+ const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation,undefined,config);
  if(planned.restoreRetainedBlockMarker)await assertRetainedBlockMarkerOwner(sql,planned.allocation.id,checkout.checkoutId);
- return {...proof,planned};
+ return {...proof,planned,configData:configRow.data as string};
 }
 /** Historical identity proof only: no current availability, clock or pricing reads. */
 async function dispatchBaseCatalogues(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<Map<string,any>>{
@@ -264,7 +316,7 @@ function allocationLineFormatMatches(old:any,line:any,catalog:any):boolean{
 const allocationSelectionTuple=(line:any)=>[line.restaurantConfig,line.selected_combo_items,line.selected_modifiers,line.selected_fraction_parts,line.note,line.variantId,line.variantSku,line.trackingData];
 /** Caller owns the native financial transaction. Never allocates or commits independently. */
 export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<void>{
- const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE'),selection=checkout.allocation!;
+ const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE',true),selection=checkout.allocation!;
  // Formats use the reservation writer only when this very transaction has
  // already consumed and sealed its genuine native dispatch preparation.
  let reservedDispatch=false;
@@ -306,9 +358,13 @@ export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowChe
 export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAuthority,type?:string){
  const proof=await readAllocation(sql,local);if(!proof)return null;
  const remaining:Record<string,number>={},total:Record<string,number>={};let lastError:unknown;
- for(const member of proof.authority.allocations.filter(m=>!type||m.ncfType===type)){
+ const members = proof.authority.allocations.filter(member => !type || member.ncfType === type);
+ // The caller holds the native transaction for the entire scan. Use the same config for each member.
+ const config = members.length ? await measureSettingsReturnQa('fiscal.allocationAvailabilityConfig',
+  () => document<BusinessConfig>(sql,'config','current')) : undefined;
+ for(const member of members){
   try{
-   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);
+   const planned=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId,config);
    if(planned.restoreRetainedBlockMarker){
     await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],
      planned.config,planned.buffer,planned.selection.ncf,{requireIssuer:true});
@@ -322,11 +378,17 @@ export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAut
  return {authorizationId:proof.authority.authorizationId,remaining,total};
 }
 export async function allocationCommitPreconditions(sql:SQL,checkout:FiscalWorkflowCheckoutV2){
- const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');
- const ids=[['config','current'],['fiscalAllocations',proof.planned.allocation.id],['fiscalRanges',proof.planned.range.id],['localFiscalBuffer',proof.planned.buffer.id]];
- const snapshots=[];
- for(const [collection,id] of ids){const saved=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);snapshots.push({collection,id,expected:saved?.data||null});}
- return snapshots;
+ const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE',true);
+ const ids = [
+  ['fiscalAllocations',proof.planned.allocation.id],
+  ['fiscalRanges',proof.planned.range.id],
+  ['localFiscalBuffer',proof.planned.buffer.id],
+ ] as const;
+ const snapshots=await measureSettingsReturnQa('fiscal.allocationCommitRead', () => readAllocationDocuments(sql,ids));
+ return [
+  {collection:'config',id:'current',expected:proof.configData||null},
+  ...ids.map(([collection,id])=>({collection,id,expected:snapshots.get(collection)||null})),
+ ];
 }
 
 /** Completed authority stays readable after withdrawal; verification uses the immutable local receipt, never new eligibility. */

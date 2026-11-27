@@ -15,6 +15,7 @@ import {
   type LargeMasterSyncV3Progress,
   type LargeMasterSyncV3RuntimeVersion,
   type LargeMasterSyncV3Store,
+  type V3CatalogSaleRead, type V3CatalogSaleReadStage,
   type V3CatalogPageRequest, type V3CatalogPage, type V3ProductionCatalogRequest, type V3ProductionCatalogPage,
 } from '../sync/LargeMasterSyncV3Types';
 import { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } from '../sync/LargeMasterSyncV3OperationGate';
@@ -42,7 +43,7 @@ export type LargeMasterSyncV3SqliteFaultHook = (
 
 type RecordObject = Record<string, unknown>;
 const CHUNK_SUB_BATCH_SIZE = 250;
-const INVENTORY_SNAPSHOT_SQL = `SELECT i.inventory_version, i.cursor
+const INVENTORY_SNAPSHOT_SQL = `SELECT i.sync_id, i.sync_version, i.inventory_version, i.cursor
       FROM master_v3_inventory_state i JOIN master_v3_state s ON s.singleton = 1
       WHERE i.singleton = 1
       AND (s.active_sync_id = i.sync_id AND s.active_version = i.sync_version
@@ -224,22 +225,42 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     }));
   }
 
-  async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string) {
+  async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string,
+    checkInventory = false) {
     requireOperationalVersion(runtime);
-    if (!itemIds.length) return { balances: {}, variants: {} };
+    const balances: Record<string, { qtyOnHand: number; qtyReserved: number; qtyCommitted: number }> = {};
+    const variants: Record<string, Record<string, unknown>[]> = {};
+    if (!itemIds.length) return { balances, variants };
     if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
     const placeholders = itemIds.map(() => '?').join(',');
-    const [balanceRows, variantRows] = await Promise.all([
-      this.connection().query(`SELECT item_id, qty_on_hand, qty_reserved, qty_committed FROM master_v3_inventory_balances
-        WHERE warehouse_id = ? AND item_id IN (${placeholders})`, [warehouseId, ...itemIds]),
-      this.connection().query(`SELECT article_id, record_json FROM master_v3_variants WHERE sync_version = ?
-        AND article_id IN (${placeholders}) AND active = 1 ORDER BY variant_id`, [runtime.syncVersion, ...itemIds]),
-    ]);
-    const variants: Record<string, Record<string, unknown>[]> = {};
-    rows(variantRows).forEach(row => (variants[String(row.article_id)] ||= []).push(operationalRecord(row)));
-    return { variants, balances: Object.fromEntries(rows(balanceRows).map(row => [String(row.item_id), {
-      qtyOnHand: Number(row.qty_on_hand), qtyReserved: Number(row.qty_reserved), qtyCommitted: Number(row.qty_committed),
-    }])) };
+    // The single-article path needs the same live inventory check as getInventoryBalance.
+    // An explicit marker distinguishes an absent baseline from an article with no balance.
+    const inventoryCte = checkInventory ? `WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})` : '';
+    const marker = checkInventory
+      ? "UNION ALL SELECT 'inventory', NULL, NULL, NULL, NULL, NULL, NULL FROM inventory"
+      : '';
+    const params = checkInventory ? [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion] : [];
+    const result = await this.connection().query(`${inventoryCte}
+      SELECT 'balance' AS kind, item_id AS article_id, qty_on_hand, qty_reserved, qty_committed,
+        NULL AS record_json, NULL AS variant_id
+      FROM master_v3_inventory_balances WHERE warehouse_id = ? AND item_id IN (${placeholders})
+      UNION ALL
+      SELECT 'variant', article_id, NULL, NULL, NULL, record_json, variant_id
+      FROM master_v3_variants WHERE sync_version = ? AND article_id IN (${placeholders}) AND active = 1
+      ${marker}
+      ORDER BY variant_id`,
+    [...params, warehouseId, ...itemIds, runtime.syncVersion, ...itemIds]);
+    const supportRows = rows(result);
+    if (checkInventory && !supportRows.some(row => row.kind === 'inventory')) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    }
+    for (const row of supportRows) {
+      if (row.kind === 'variant') (variants[String(row.article_id)] ||= []).push(operationalRecord(row));
+      else if (row.kind === 'balance') balances[String(row.article_id)] = {
+        qtyOnHand: Number(row.qty_on_hand), qtyReserved: Number(row.qty_reserved), qtyCommitted: Number(row.qty_committed),
+      };
+    }
+    return { balances, variants };
   }
 
   async findOperationalCode(runtime: LargeMasterSyncV3RuntimeVersion, code: string): Promise<{ articleId: string; variantId: string | null } | null> {
@@ -892,20 +913,59 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         ...(Number(state.contract_version) >= 2 ? { contractVersion: Number(state.contract_version) } : {}) } : null;
   }
 
-  async readOperationalSnapshot(runtime: LargeMasterSyncV3RuntimeVersion) {
+  async readOperationalSnapshot(runtime: LargeMasterSyncV3RuntimeVersion, includeCartConfig = false) {
     requireOperationalVersion(runtime);
-    const row = first(await this.connection().query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
-      SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
-        o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor
+    const snapshot = `SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
+        o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor,
+        i.sync_id AS inventory_sync_id, i.sync_version AS inventory_sync_version
       FROM master_v3_state s
       LEFT JOIN master_v3_operational_owner o ON o.singleton = 1
       LEFT JOIN inventory i ON 1 = 1
-      WHERE s.singleton = 1`, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
+      WHERE s.singleton = 1`;
+    // A single read projects terminal authority fields and the current snapshot from the same SQLite view.
+    // Leave sibling documents, malformed JSON and large projections to the ordinary config reader.
+    const cartAuthority = `, snapshot AS (${snapshot}), cart_config AS MATERIALIZED (
+      SELECT CASE WHEN json_valid(doc.data) THEN CASE
+        WHEN json_extract(doc.data, '$.id') = 'current' AND json_type(doc.data, '$.terminals') = 'array'
+        THEN (
+          SELECT CASE WHEN count(*) = count(CASE WHEN json_type(value, '$.config') = 'object' THEN 1 END)
+            THEN json_group_array(json_object(
+              'id', value -> '$.id',
+              'config', json_object(
+                'erpTerminalId', value -> '$.config.erpTerminalId',
+                'currentDeviceId', value -> '$.config.currentDeviceId',
+                'erpBinding', value -> '$.config.erpBinding',
+                'inventoryScope', value -> '$.config.inventoryScope',
+                'pricing', value -> '$.config.pricing',
+                'fiscal', value -> '$.config.fiscal'
+              )
+            )) END
+          FROM (SELECT CASE WHEN terminal.type = 'object' THEN terminal.value END AS value
+                FROM json_each(doc.data, '$.terminals') terminal)
+        )
+        END END AS terminals
+      FROM documents doc
+      WHERE doc.collection_name = 'config' AND doc.doc_id = 'current'
+        AND NOT EXISTS (
+          SELECT 1 FROM documents sibling
+          WHERE sibling.collection_name = 'config' AND sibling.doc_id <> doc.doc_id
+        )
+    )
+    SELECT snapshot.*, CASE WHEN length(cart_config.terminals) <= 65536 THEN cart_config.terminals END AS config_terminals
+      FROM (SELECT 1)
+      LEFT JOIN snapshot ON 1 = 1 LEFT JOIN cart_config ON 1 = 1`;
+    const statement = `WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})${includeCartConfig ? cartAuthority : ' ' + snapshot}`;
+    const row = first(await this.connection().query(statement, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
+    const inventory = row?.inventory_version != null
+      ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null;
     return {
+      ...(includeCartConfig ? { configTerminals: typeof row?.config_terminals === 'string'
+        ? JSON.parse(row.config_terminals) as import('../../types').BusinessConfig['terminals'] : null } : {}),
       active: row?.active_sync_id && row.active_version != null
         ? { syncId: String(row.active_sync_id), syncVersion: Number(row.active_version) } : null,
-      inventory: row?.inventory_version != null
-        ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null,
+      inventory,
+      inventoryAuthority: inventory && row?.inventory_sync_id && row.inventory_sync_version != null
+        ? { ...inventory, syncId: String(row.inventory_sync_id), syncVersion: Number(row.inventory_sync_version), contractVersion: 2 } : null,
       owner: row?.owner_sync_id != null
         ? { syncId: String(row.owner_sync_id), syncVersion: Number(row.owner_version), binding: String(row.binding) } : null,
     };
@@ -1092,6 +1152,36 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     }
     const result = await this.connection().query(statement, parameters);
     return rows(result).map(operationalRecord);
+  }
+
+  async readOperationalCatalogSale(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string, tariffId: string,
+    observe?: (stage: V3CatalogSaleReadStage) => void): Promise<V3CatalogSaleRead> {
+    requireOperationalVersion(runtime);
+    const db = this.connection();
+    observe?.('SQLITE_START');
+    let result: QueryResult;
+    try {
+      // A missing article or price does not hide a valid inventory snapshot.
+      result = await db.query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
+        SELECT inventory.inventory_version, inventory.cursor, a.article_id, a.record_json, p.price
+        FROM inventory
+        LEFT JOIN master_v3_articles a ON a.sync_version = ? AND a.article_id = ? AND a.active = 1 AND a.sellable = 1
+        LEFT JOIN master_v3_prices p ON p.sync_version = a.sync_version AND p.article_id = a.article_id AND p.tariff_id = ?`,
+      [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion, runtime.syncVersion, articleId, tariffId]);
+    } finally {
+      observe?.('SQLITE_END');
+    }
+    const row = first(result);
+    if (!row) return { inventory: null, article: null, price: undefined };
+    const article = row.article_id == null ? null : operationalRecord(row);
+    if (article && (typeof article.id !== 'string' || article.id.trim() !== articleId)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVALID');
+    }
+    return {
+      inventory: { version: Number(row.inventory_version), cursor: String(row.cursor) },
+      article,
+      price: row.price == null ? undefined : Number(row.price),
+    };
   }
 
   async getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null> {

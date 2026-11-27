@@ -56,7 +56,13 @@ test('App clients skip endpoint publication and ERP timers while primary Master 
   assert.ok(guard > effect.indexOf('const publishEndpoint = async'));
   assert.match(effect.slice(guard, guard + 180), /return \(\) => \{ disposed = true; \};/);
   assert.doesNotMatch(effect.slice(guard, guard + 180), /publishEndpoint\(\)/);
-  assert.match(effect.slice(0, guard), /isPrimary: currentTerminal\.config\?\.isPrimaryNode !== false/);
+  // The lifecycle reads the current terminal through `currentTerminalRef` so an
+  // ordinary config snapshot cannot re-create the effect; the intent (publish
+  // the terminal's primary flag) is unchanged.
+  assert.match(
+    effect.slice(0, guard),
+    /isPrimary: (?:currentTerminal|currentTerminalRef\.current|terminal)\.config\?\.isPrimaryNode !== false/,
+  );
   assert.ok(effect.indexOf('void publishEndpoint();', guard) > guard, 'non-client primary lifecycle publishes after the client guard');
   assert.ok(guard < effect.indexOf('createErpHeartbeatScheduler('));
   assert.ok(guard < effect.indexOf('syncTriggerCoordinator.configure('));

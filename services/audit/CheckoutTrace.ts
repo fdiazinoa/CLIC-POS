@@ -8,7 +8,9 @@ export type CheckoutTraceKind =
   | 'ATTEMPT_HELD'
   | 'AMOUNT_CHANGED'
   | 'BOOT_RECONCILED'
-  | 'PAYMENT_RESUMED';
+  | 'PAYMENT_RESUMED'
+  | 'OFFLINE_RESERVE_QUARANTINED'
+  | 'OFFLINE_RESERVE_RECOVERED';
 
 export type CheckoutTraceEntry = {
   id: string;
@@ -44,7 +46,7 @@ export const recordCheckoutTrace = (kind: CheckoutTraceKind, detail: string): vo
     at: new Date().toISOString(),
     kind,
     detail: text.slice(0, 400),
-    severity: kind === 'ATTEMPT_HELD' || kind === 'AMOUNT_CHANGED' ? 'WARNING' : 'INFO',
+    severity: kind === 'ATTEMPT_HELD' || kind === 'AMOUNT_CHANGED' || kind === 'OFFLINE_RESERVE_QUARANTINED' ? 'WARNING' : 'INFO',
   };
   write([entry, ...read()]);
   console.info('[checkout]', kind, text);

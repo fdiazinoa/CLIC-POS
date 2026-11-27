@@ -83,14 +83,18 @@ test('actual TicketHistory email refreshes archived persisted proof after approv
  await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
 });
 
-async function workflowFixture(){
+async function workflowFixture({ id = 'original', terminalId = 'terminal', ncfType = 'E31', checkoutId = ncfType === 'E32' ? 'f46987a5-d8d9-45dc-a167-8b01f0b91d89' : undefined } = {}){
  const f=await fixture();delete f.tx.fiscalPrintProof;delete f.tx.fiscalSubmissionScope;
- Object.assign(f.tx,{ncf:'E310000001021',electronicNcf:'E310000001021',ncfType:'E31',customerSnapshot:{name:'Original incorrecto',taxId:'BAD'},currency:'DOP',fiscalEnvironment:0,fiscalIssuance:{issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal'}});
+ const ncf = ncfType + '0000001021';
+ Object.assign(f.tx,{id,terminalId,ncf,electronicNcf:ncf,ncfType,customerSnapshot:{name:'Original incorrecto',taxId:'BAD'},currency:'DOP',fiscalEnvironment:0,fiscalIssuance:{issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId}});
+ if (checkoutId) f.tx.fiscalWorkflowCheckoutId = checkoutId;
  const envelope={transaction:JSON.parse(JSON.stringify(f.tx))};
- const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'};
+ const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId,deviceId:'device'};
  const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
  const {sha256Utf8}=await import('../services/sync/LargeMasterSyncV3Client');
- const state:any={schemaVersion:2,source:'ERP_POS_FISCAL_WORKFLOW_V2',mode:'WORKFLOW',transactionId:f.tx.id,workflowId:'permit',permitId:'permit',scope,issuerRnc:'130090752',environment:0,ncf:f.tx.ncf,ncfType:'E31',currency:'DOP',exchangeRate:1,total:352,saleEventId:'event',originalSourceEnvelope:envelope,originalDigestV2:await sha256Utf8(JSON.stringify(canonical({schemaVersion:2,source:'POS_ORIGINAL_ENVELOPE_V2',scope,saleEventId:'event',payload:envelope}))),checksumV1:await fiscalStatusSourceChecksum(f.tx),observationVersion:3,draftRevision:1,decision:'ACCEPTED_CONDITIONAL',state:'ACCEPTED_CONDITIONAL',buyer:{name:'Comprador fiscal efectivo',taxId:'101010101'},canCorrect:false,observedAt:'2026-10-18T03:31:00Z',history:[],signature:{schemaVersion:1,qrUrl:'https://ecf.dgii.gov.do/testecf/ConsultaTimbre?RncEmisor=130090752&RncComprador=101010101&ENCF=E310000001021&FechaEmision=15-10-2026&MontoTotal=352.00&FechaFirma=15-10-2026%2023%3A30%3A53&CodigoSeguridad=NVrTbH',securityCode:'NVrTbH',signedAt:'15-10-2026 23:30:53'}};
+ const qrUrl = ncfType === 'E32' ? f.proof.providerReceipt.printEvidence.qrUrl :
+  'https://ecf.dgii.gov.do/testecf/ConsultaTimbre?RncEmisor=130090752&RncComprador=101010101&ENCF=E310000001021&FechaEmision=15-10-2026&MontoTotal=352.00&FechaFirma=15-10-2026%2023%3A30%3A53&CodigoSeguridad=NVrTbH';
+ const state:any={schemaVersion:2,source:'ERP_POS_FISCAL_WORKFLOW_V2',mode:'WORKFLOW',transactionId:f.tx.id,workflowId:'permit',permitId:'permit',scope,issuerRnc:'130090752',environment:0,ncf,ncfType,currency:'DOP',exchangeRate:1,total:352,saleEventId:'event',originalSourceEnvelope:envelope,originalDigestV2:await sha256Utf8(JSON.stringify(canonical({schemaVersion:2,source:'POS_ORIGINAL_ENVELOPE_V2',scope,saleEventId:'event',payload:envelope}))),checksumV1:await fiscalStatusSourceChecksum(f.tx),observationVersion:3,draftRevision:1,decision:'ACCEPTED_CONDITIONAL',state:'ACCEPTED_CONDITIONAL',buyer:{name:'Comprador fiscal efectivo',taxId:'101010101'},canCorrect:false,observedAt:'2026-10-18T03:31:00Z',history:[],signature:{schemaVersion:1,qrUrl,securityCode:'NVrTbH',signedAt:'15-10-2026 23:30:53'}};
  return {tx:f.tx,state};
 }
 test('V2 verified corrected buyer reaches QR, ESC/POS and email without rewriting retained original; conditional is explicit',async()=>{
@@ -108,5 +112,383 @@ test('print readiness deadline remains bounded when transport ignores cancellati
  try{const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx,{timeoutMs:25}),undefined);assert.ok(Date.now()-start<250);assert.equal(JSON.stringify(f.tx),before);}finally{fiscalWorkflowV2Client.cached=old;fiscalWorkflowV2Client.consult=oldConsult;fiscalWorkflowV2Client.enabled=oldEnabled;}
 });
 
+test('MSeller checkout only sends signed tickets to the printer and reuses the cached timbre', async t => {
+ const { printTicket } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { tx, state } = await workflowFixture({ checkoutId: '11ddc090-03ec-433b-996d-b62f00fde108' });
+ const stale = { ...tx };
+ delete stale.fiscalWorkflowCheckoutId;
+ const config = { currencySymbol: 'RD$', taxRate: 0, taxes: [], receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let signatureReady = false;
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  assert.equal(id, tx.id);
+  if (!signatureReady) throw new Error('FISCAL_WORKFLOW_AUTH_REQUIRED');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+
+ assert.equal(await printTicket(stale, config), false);
+ assert.deepEqual(jobs, []);
+ signatureReady = true;
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(consult.mock.callCount(), 2);
+ assert.equal(jobs.length, 2);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+ assert.equal(jobs[1], jobs[0]);
+});
+
+test('one print request survives both deadlines and coalesces another caller until the pending timbre arrives', async t => {
+ const { printTicket, printIntegratedPaymentArtifacts } = await import('../utils/printer');
+ const { dbAdapter } = await import('../services/db');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } = await import('../services/sync/LargeMasterSyncV3OperationGate');
+ const { tx, state } = await workflowFixture({ checkoutId: '21ddc090-03ec-433b-996d-b62f00fde108' });
+ const config = { currencySymbol: 'RD$', receiptConfig: { showQr: true }, companyInfo: { name: 'Synthetic' }, currencies: [] } as any;
+ const jobs: string[] = [];
+ let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ let started!: () => void;
+ const startedConsult = new Promise<void>(resolve => { started = resolve; });
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async () => { started(); return cached; });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), true);
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+ t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+
+ const request = printTicket(tx, config);
+ await startedConsult;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(consult.mock.callCount(), 1);
+ t.mock.timers.tick(17_000);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(isLargeMasterSyncV3OperationalWindowHeld(), false);
+ assert.deepEqual(jobs, []);
+ assert.equal(printTicket(tx, config), request);
+ const integrated = printIntegratedPaymentArtifacts(tx, config);
+ assert.equal(printIntegratedPaymentArtifacts(tx, config), integrated);
+ const releaseBaseline = reserveLargeMasterSyncV3BaselineMutation();
+ cached = { ...cached, signature: state.signature, state: 'SIGNED_PENDING' };
+ try {
+  t.mock.timers.tick(1500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(jobs, []);
+ } finally {
+  releaseBaseline();
+ }
+
+ assert.equal(await request, true);
+ assert.equal((await integrated).ticketPrinted, true);
+ assert.equal(jobs.length, 1);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+});
+
+test('print readiness survives a transient status error and returns a signed pending timbre', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { tx, state } = await workflowFixture();
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) throw new Error('FISCAL_WORKFLOW_UNAVAILABLE');
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+
+ const display = await resolveFiscalPrintReadiness(tx, { timeoutMs: 6000 });
+ assert.equal(attempts, 2);
+ assert.equal(display?.securityCode, state.signature.securityCode);
+ assert.equal(display?.dgiiAccepted, false);
+});
+
+test('a private terminal hint wakes an active print and still requires an authenticated signature', async t => {
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+ const { tx, state } = await workflowFixture({ checkoutId: '11ddc090-03ec-433b-996d-b62f00fde108', id: '11ddc090-03ec-433b-996d-b62f00fde109' });
+ const scope = { tenantId: 'tenant-a', storeId: 'store-a', terminalId: 'terminal-a' };
+ const hint = { version: 1, transactionId: tx.id, ...scope };
+ const controller = new AbortController();
+ t.after(() => controller.abort());
+ let cached: Awaited<ReturnType<typeof fiscalWorkflowV2Client.cached>> = null;
+ let attempts = 0;
+ let firstConsult!: () => void;
+ const consulting = new Promise<void>(resolve => { firstConsult = resolve; });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+  if (++attempts === 1) { firstConsult(); return { ...state, signature: null }; }
+  cached = { ...state, decision: 'PENDING', state: 'SIGNED_PENDING' };
+  return cached;
+ });
+ t.mock.timers.enable({ apis: ['setTimeout'] });
+ const print = resolveFiscalPrintReadiness(tx, { waitForSignature: true, useRealtimeHint: true, signal: controller.signal });
+ await consulting;
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, { ...scope, terminalId: 'retired-context' });
+ receiveFiscalPrintHint({ ...hint, storeId: 'another-store' }, scope, scope);
+ receiveFiscalPrintHint({ ...hint, transactionId: '00000000-0000-0000-0000-000000000001' }, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 1);
+ receiveFiscalPrintHint(hint, scope, scope);
+ receiveFiscalPrintHint(hint, scope, scope);
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal(attempts, 2, 'wakes without the polling timer and ignores the duplicate hint');
+ assert.equal((await print)?.securityCode, state.signature.securityCode);
+ assert.equal((await print)?.dgiiAccepted, false);
+});
+
+test('committed MSeller sales and returns send the existing outbox before reading print status', async t => {
+ const { prepareCommittedFiscalPrint } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { durableOutboxBatchSender } = await import('../services/sync/DurableOutboxBatchSender');
+ const operations: string[] = [];
+ const { tx } = await workflowFixture({ checkoutId: '11ddc090-03ec-433b-996d-b62f00fde108' });
+ t.mock.method(durableOutboxBatchSender, 'sendNext', async () => { operations.push('outbox'); });
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => null);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  operations.push(id);
+  return { state: 'HELD', signature: null };
+ });
+
+ await prepareCommittedFiscalPrint({ ...tx, id: 'sale-e32', ncfType: 'E32' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'return-e34', ncfType: 'E34', documentType: 'REFUND' });
+ await prepareCommittedFiscalPrint({ ...tx, id: 'legacy', fiscalWorkflowCheckoutId: undefined });
+ assert.deepEqual(operations, ['outbox', 'sale-e32', 'outbox', 'return-e34']);
+});
+
 test('OFF print readiness and email preserve V1 proof and never consult a V2 endpoint',async()=>{const {fiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{resolveFiscalPrintReadiness}=await import('../services/fiscal/FiscalPrintEvidence');const old=fiscalWorkflowV2Client.consult,oldEnabled=fiscalWorkflowV2Client.enabled;let network=0;fiscalWorkflowV2Client.enabled=()=>false;fiscalWorkflowV2Client.consult=async()=>{network++;throw Error('V2_FORBIDDEN');};try{const f=await fixture(),signed=await resolveFiscalPrintReadiness(f.tx);assert.ok(signed);delete f.tx.fiscalPrintProof;const start=Date.now();assert.equal(await resolveFiscalPrintReadiness(f.tx),undefined);assert.ok(Date.now()-start<100);assert.equal((buildReceiptEmailPayload(f.tx,'fixture@example.invalid',{currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:true},companyInfo:{name:'Synthetic'},currencies:[]} as any,'RD$') as any).fiscalPrintEvidence,undefined);assert.equal(network,0);}finally{fiscalWorkflowV2Client.consult=old;fiscalWorkflowV2Client.enabled=oldEnabled;}});
 test('retained format tax rows without a display name print safely without mutating the original',async()=>{const f=await fixture();f.tx.taxBreakdown=[{taxId:'vat',type:'VAT',rate:.18,amount:99,taxableBase:550},{taxId:'service',type:'SERVICE_CHARGE',rate:.1,amount:55,taxableBase:550}];const before=JSON.stringify(f.tx),config:any={currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:true},companyInfo:{name:'Synthetic'},currencies:[]};const text=Buffer.from(buildEscPosTicketPayload(f.tx,config,[])!,'base64').toString('utf8');assert.match(text,/ITBIS 18%/);assert.match(text,/Servicio 10%/);assert.equal(JSON.stringify(f.tx),before);});
+
+async function optedInPrintFixture(t: import('node:test').TestContext) {
+ const { tx, state } = await workflowFixture({
+  id: 'a527e8c3-152a-4731-a6da-806bf2f40a55', terminalId: 'b0e720c2-9af1-4160-8582-a2e36a145eba', ncfType: 'E32',
+ });
+ const binding = { tenantId: 'tenant', storeId: 'store', terminalId: tx.terminalId };
+ const storage = new Map([
+  ['clic_erp_sync_tenant_id', binding.tenantId], ['clic_erp_sync_store_id', binding.storeId],
+  ['clic_erp_sync_terminal_id', binding.terminalId], ['CLIC_POS_DEVICE_ID', 'device'],
+ ]);
+ const oldStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => storage.get(key) ?? null } });
+ t.after(() => oldStorage
+  ? Object.defineProperty(globalThis, 'localStorage', oldStorage)
+  : Reflect.deleteProperty(globalThis, 'localStorage'));
+
+ const config: any = { currencySymbol: 'RD$', companyInfo: { name: 'Synthetic' }, taxes: [], currencies: [],
+  receiptConfig: { showQr: true }, terminals: [{ id: tx.terminalId, config: { msellerRealtimePrintEnabled: true, currentDeviceId: 'device' } }] };
+ return { tx, state, binding, config };
+}
+
+test('opted-in ticket waits beyond the legacy budget, ignores foreign hints and prints once from authenticated V2 evidence', { timeout: 3000 }, async t => {
+ const { printTicket } = await import('../utils/printer');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { dbAdapter } = await import('../services/db');
+ const { reserveLargeMasterSyncV3BaselineMutation } = await import('../services/sync/LargeMasterSyncV3OperationGate');
+ const { tx, state, binding, config } = await optedInPrintFixture(t);
+ let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+ const signed = { ...cached, state: 'SIGNED_PENDING', signature: state.signature };
+ let nextStatus = cached;
+ const jobs: string[] = [];
+ const flush = () => new Promise(resolve => setImmediate(resolve));
+ let startConsult!: () => void;
+ const started = new Promise<void>(resolve => { startConsult = resolve; });
+ const stale = { ...tx, fiscalWorkflowCheckoutId: undefined };
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ const consult = t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  assert.equal(id, tx.id);
+  startConsult();
+  cached = nextStatus;
+  return cached;
+ });
+ t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ escPosBase64 }: { escPosBase64: string }) => {
+  jobs.push(Buffer.from(escPosBase64, 'base64').toString('utf8'));
+  return true;
+ });
+ t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+
+ const pending = printTicket(stale, config);
+ assert.equal(printTicket(tx, config), pending);
+ await started;
+ await flush();
+ assert.equal(consult.mock.callCount(), 1);
+ t.mock.timers.tick(17_000);
+ await flush();
+ assert.equal(consult.mock.callCount(), 2);
+ assert.deepEqual(jobs, []);
+
+ const hint = { version: 1, transactionId: tx.id, ...binding };
+ receiveFiscalPrintHint(hint, binding, { ...binding, terminalId: 'previous-binding' });
+ receiveFiscalPrintHint({ ...hint, tenantId: 'another-tenant' }, binding, binding);
+ receiveFiscalPrintHint({ ...hint, storeId: 'another-store' }, binding, binding);
+ receiveFiscalPrintHint({ ...hint, transactionId: '00000000-0000-0000-0000-000000000001' }, binding, binding);
+ await flush();
+ assert.equal(consult.mock.callCount(), 2);
+
+ nextStatus = signed;
+ const releaseBaseline = reserveLargeMasterSyncV3BaselineMutation();
+ try {
+  receiveFiscalPrintHint(hint, binding, binding);
+  receiveFiscalPrintHint(hint, binding, binding);
+  await flush();
+  assert.equal(consult.mock.callCount(), 3);
+  assert.deepEqual(jobs, []);
+ } finally {
+  releaseBaseline();
+ }
+ assert.equal(await pending, true);
+ assert.equal(jobs.length, 1);
+ assert.match(jobs[0], /NVrTbH/);
+ assert.match(jobs[0], /Pendiente de confirmacion/);
+
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(consult.mock.callCount(), 3);
+ assert.deepEqual(jobs, [jobs[0], jobs[0]]);
+});
+
+test('the opted-in ticket releases expired requests during status and V3 baseline waits', { timeout: 3000 }, async t => {
+ const { printTicket } = await import('../utils/printer');
+ const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+ const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+ const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+ const { dbAdapter } = await import('../services/db');
+ const { reserveLargeMasterSyncV3BaselineMutation } = await import('../services/sync/LargeMasterSyncV3OperationGate');
+ const { tx, state, binding, config } = await optedInPrintFixture(t);
+ let startConsult!: () => void;
+ const started = new Promise<void>(resolve => { startConsult = resolve; });
+ let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+ let attempts = 0;
+ const flush = () => new Promise(resolve => setImmediate(resolve));
+ t.mock.method(dbAdapter, 'getDocument', async () => tx);
+ t.mock.method(dbAdapter, 'getCollection', async () => []);
+ t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+ t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+ t.mock.method(fiscalWorkflowV2Client, 'consult', async (id: string) => {
+  assert.equal(id, tx.id);
+  if (++attempts === 1) {
+   startConsult();
+   throw new Error('HTTP 520');
+  }
+  return cached;
+ });
+ const dispatch = t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async () => true);
+ t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+
+ const pending = printTicket(tx, config);
+ await started;
+ await flush();
+ t.mock.timers.tick(29_999);
+ await flush();
+ assert.equal(attempts, 2);
+ assert.equal(dispatch.mock.callCount(), 0);
+ t.mock.timers.tick(1);
+ assert.equal(await pending, false);
+ receiveFiscalPrintHint({ version: 1, transactionId: tx.id, ...binding }, binding, binding);
+ await flush();
+ assert.equal(attempts, 2);
+ assert.equal(dispatch.mock.callCount(), 0);
+
+ cached = { ...cached, state: 'SIGNED_PENDING', signature: state.signature };
+ const releaseBaseline = reserveLargeMasterSyncV3BaselineMutation();
+ try {
+  const baselinePending = printTicket(tx, config);
+  await flush();
+  t.mock.timers.tick(30_000);
+  assert.equal(await baselinePending, false);
+  assert.equal(dispatch.mock.callCount(), 0);
+ } finally {
+  releaseBaseline();
+ }
+ await flush();
+ assert.equal(dispatch.mock.callCount(), 0);
+
+ assert.equal(await printTicket(tx, config), true);
+ assert.equal(attempts, 2);
+ assert.equal(dispatch.mock.callCount(), 1);
+});
+
+for (const waitForSignature of [true, false]) {
+ test(`print readiness polls without relying on Realtime when the check is ${waitForSignature ? 'on' : 'off'}`, { timeout: 3000 }, async t => {
+  const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+  const { resolveFiscalPrintReadiness } = await import('../services/fiscal/FiscalPrintEvidence');
+  const { receiveFiscalPrintHint } = await import('../services/fiscal/FiscalPrintHint');
+  const { tx, state } = await workflowFixture({ id: 'a527e8c3-152a-4731-a6da-806bf2f40a55', ncfType: 'E32' });
+  let cached = { ...state, state: 'AWAITING_APPLICATION', decision: 'PENDING', signature: null };
+  let attempts = 0;
+  let startConsult!: () => void;
+  const started = new Promise<void>(resolve => { startConsult = resolve; });
+  t.mock.method(fiscalWorkflowV2Client, 'enabled', () => true);
+  t.mock.method(fiscalWorkflowV2Client, 'cached', async () => cached);
+  t.mock.method(fiscalWorkflowV2Client, 'consult', async () => {
+   startConsult();
+   if (++attempts === 2) cached = { ...cached, state: 'SIGNED_PENDING', signature: state.signature };
+   return cached;
+  });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  if (waitForSignature) t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const pending = resolveFiscalPrintReadiness(tx, { waitForSignature: true, useRealtimeHint: waitForSignature, signal: controller.signal });
+  await started;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(attempts, 1);
+  if (!waitForSignature) {
+   receiveFiscalPrintHint({ version: 1, transactionId: tx.id, ...state.scope }, state.scope, state.scope);
+   await new Promise(resolve => setImmediate(resolve));
+   assert.equal(attempts, 1);
+  }
+  if (waitForSignature) t.mock.timers.tick(1500);
+  const display = await pending;
+  assert.equal(attempts, 2);
+  assert.equal(display?.securityCode, state.signature.securityCode);
+  assert.equal(display?.dgiiAccepted, false);
+ });
+}
+
+test('MSeller print opt-in applies to E32 and E34 of the current enrolled box only', async () => {
+ const { terminalUsesMSellerRealtimePrint } = await import('../services/fiscal/FiscalPrintEvidence');
+ const { tx, state } = await workflowFixture({ ncfType: 'E32' });
+ const scope = state.scope;
+ const local = { id: 'local-box', config: { erpBinding: scope, currentDeviceId: 'device', msellerRealtimePrintEnabled: true } };
+ const terminal = [local] as any;
+ assert.equal(terminalUsesMSellerRealtimePrint(tx, terminal, scope, 'device'), true);
+ const note = { ...tx, ncfType: 'E34', electronicNcf: 'E340000001021', terminalId: 'local-box' };
+ assert.equal(terminalUsesMSellerRealtimePrint(note, terminal, scope, 'device'), true);
+ assert.equal(terminalUsesMSellerRealtimePrint({ ...tx, terminalId: 'other-box' }, terminal, scope, 'device'), false);
+ assert.equal(terminalUsesMSellerRealtimePrint(tx, terminal, { ...scope, storeId: 'other-store' }, 'device'), false);
+ assert.equal(terminalUsesMSellerRealtimePrint(tx, terminal, scope, 'other-device'), false);
+ assert.equal(terminalUsesMSellerRealtimePrint(tx, [local, local] as any, scope, 'device'), false);
+ assert.equal(terminalUsesMSellerRealtimePrint({ ...tx, ncfType: 'E31' }, terminal, scope, 'device'), false);
+ assert.equal(terminalUsesMSellerRealtimePrint({ ...tx, fiscalWorkflowCheckoutId: undefined }, terminal, scope, 'device'), false);
+ local.config.msellerRealtimePrintEnabled = false;
+ assert.equal(terminalUsesMSellerRealtimePrint(tx, terminal, scope, 'device'), false);
+});

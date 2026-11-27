@@ -5,6 +5,7 @@ export type SyncFeatureFlagName =
     | 'heartbeat_v2'
     | 'private_realtime'
     | 'sqlite_outbox_v2'
+    | 'pos_outbox_immediate_flush'
     | 'pending_operations_recovery';
 
 const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
@@ -17,6 +18,8 @@ const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
     private_realtime: false,
     // POS-2A/POS-2B stay dark until the ERP batch receiver is deployed.
     sqlite_outbox_v2: false,
+    // Immediate outbox flush after sale/payment commit (rollback: local override false).
+    pos_outbox_immediate_flush: true,
 };
 
 const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
@@ -27,6 +30,7 @@ const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
     heartbeat_v2: 'VITE_HEARTBEAT_V2_ENABLED',
     private_realtime: 'VITE_PRIVATE_REALTIME_ENABLED',
     sqlite_outbox_v2: 'VITE_SQLITE_OUTBOX_V2_ENABLED',
+    pos_outbox_immediate_flush: 'VITE_POS_OUTBOX_IMMEDIATE_FLUSH_ENABLED',
 };
 
 const LOCAL_PREFIX = 'clic_pos_feature_';

@@ -172,6 +172,9 @@ type SyncRequestInit = RequestInit & {
     clicTransportClass?: SyncTransportClass;
     /** Idempotent housekeeping must not create a global legacy mutation fence. */
     clicMutationSemantics?: 'DEFAULT' | 'MAINTENANCE_NO_RETRY';
+    /** A committed outbox event is immutable: its push may not be aborted by a master/fiscal authority
+     * rotation. Only real network/timeout failures may stop it; the ERP replay settles duplicates. */
+    durableOutboxPush?: boolean;
 };
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
@@ -741,7 +744,8 @@ export class ApiSyncAdapter {
         diagnosticRequestId = `${authorityRevision}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         mutationDispatch: MutationDispatchPolicy = 'DEFAULT',
     ): Promise<Response> {
-        this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
+        const durablePush = options.durableOutboxPush === true;
+        if (!durablePush) this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
         // Add jitter to backoff (±20% randomness)
         const jitter = backoff * 0.2;
         const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
@@ -832,7 +836,7 @@ export class ApiSyncAdapter {
                 });
                 legacyJournalId = journalEntry.id;
                 await this.mutationJournal.prepareDispatch(legacyJournalId, authorityFingerprint, authorityRevision);
-                this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
+                if (!durablePush) this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
             }
             const nativeResponse = await requestJson({
                 url,
@@ -841,9 +845,11 @@ export class ApiSyncAdapter {
                 body: options.body,
                 timeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 diagnosticContext: fetchContext,
-                signal: authoritySignal,
+                // Durable outbox pushes outlive authority rotations: the event is already committed and the
+                // ERP settles a replay; aborting it was the 136-attempt "Authority request aborted" loop.
+                signal: durablePush ? undefined : authoritySignal,
             });
-            this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
+            if (!durablePush) this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
             const response = new Response(nativeResponse.text, {
                 status: nativeResponse.status,
                 headers: nativeResponse.headers,
@@ -884,7 +890,8 @@ export class ApiSyncAdapter {
             // If 503 Service Unavailable or 504 Gateway Timeout, retry
             if (effectiveMutationDispatch !== 'LEGACY_NO_RETRY' && (response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
-                await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
+                if (durablePush) await new Promise(resolve => setTimeout(resolve, effectiveBackoff));
+                else await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
                 return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal, diagnosticRequestId, mutationDispatch);
             }
 
@@ -902,7 +909,7 @@ export class ApiSyncAdapter {
                 const errorStatus = Number.isFinite(Number(error?.httpStatus)) ? Number(error.httpStatus) : null;
                 await this.mutationJournal.markOutcomeUnknown(legacyJournalId, errorStatus ?? recordedStatus);
             }
-            if (!this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
+            if (!durablePush && !this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
             const isConnectionError = this.isRecoverableConnectionError(error);
             const isTimeout = error?.name === 'AbortError';
             const httpClientDiagnostic = error?.__httpClientDiagnostic;
@@ -954,7 +961,8 @@ export class ApiSyncAdapter {
 
             if (effectiveMutationDispatch !== 'LEGACY_NO_RETRY' && (isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
-                await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
+                if (durablePush) await new Promise(resolve => setTimeout(resolve, effectiveBackoff));
+                else await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
                 return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal, diagnosticRequestId, mutationDispatch);
             }
 
@@ -3360,6 +3368,8 @@ export class ApiSyncAdapter {
             recoveryOriginal?: { document: any; collection: string };
             responseValidator?: { reference: string; validate: (payload: any) => void };
             operationCorrelationId?: string;
+            /** Immutable outbox batch: never aborted by an authority rotation or post-response revision bump. */
+            durableOutboxPush?: boolean;
         } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
@@ -3379,6 +3389,7 @@ export class ApiSyncAdapter {
         }
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
+            durableOutboxPush: options.durableOutboxPush === true,
             clicTransportClass: target.useLocalTarget ? 'LAN_LEGACY' : 'ERP_CLOUD',
             headers: {
                 ...this.buildOperationalHeaders(target, target.token, true),
@@ -3407,6 +3418,7 @@ export class ApiSyncAdapter {
             }
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
+                durableOutboxPush: options.durableOutboxPush === true,
                 clicTransportClass: retriedTarget.useLocalTarget ? 'LAN_LEGACY' : 'ERP_CLOUD',
                 headers: {
                     ...this.buildOperationalHeaders(retriedTarget, retriedTarget.token, true),
@@ -6225,6 +6237,9 @@ export class ApiSyncAdapter {
         if(events.some((event:any)=>event.payload?.fiscalReturnContract?.profile==='ORDINARY_RETURN_DOP_V1'))return createFiscalReturnTransport().deliver(events);
         const eventIds = events.map(event => String((event as any).eventId || (event as any).id || '')).filter(Boolean);
         return this.postOperationalPayload('/inbox/batch', { events }, {
+            // A committed offline sale must reach the ERP even if the master/fiscal authority rotates while
+            // the request is in flight; the batch is idempotent by eventId and the ERP replay settles it.
+            durableOutboxPush: true,
             inventoryPresentations: events.some((event:any)=>event.eventType==='SALE_POSTED'&&event.payload?.transaction?.inventoryPresentationContract===1),
             maxRequestBytes: 512 * 1024,
             responseValidator: {

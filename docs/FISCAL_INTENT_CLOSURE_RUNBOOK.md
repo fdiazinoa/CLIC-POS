@@ -14,7 +14,10 @@ Ajustes → **Sistema y Auditoría** → **Diagnóstico fiscal**. La pantalla di
 | Sesión de la terminal | «sin vencimiento» es lo esperado; una fecha concreta es un aviso. |
 | Reserva fiscal local | Comprobantes disponibles para cobrar sin red. |
 | Intento fiscal guardado | Fase e identificador: `PREPARED`, `EFFECT_POSSIBLE`, `COMMITTED`, `ACKNOWLEDGED`. |
-| Cobros ligados al intento | Los cobros que impiden descartarlo. `DECLINED` no es dinero; cualquier otro sí. |
+| Comprobantes locales | Reserva fiscal efectiva: lease V1 con permisos usables y vencimiento, o asignación V2 con remanente por tipo. |
+| Motivo de la reserva | Solo si no hay comprobantes locales usables: `AUTHORITY_REVOKED`, `AUTHORITY_CHANGED`, `EXPIRED_V1`, `MISSING_AUTHORIZATION`, `FISCAL_RANGE_EXHAUSTED`. |
+| Cobros ligados al intento | Pagos registrados en el intento (`paymentIds`). «sin pagos» es lo esperado si aún no se cobró. |
+| Payment intents | Respuesta del proveedor de pago por intento. `DECLINED` no es dinero; `AUTHORIZED` o `RECONCILIATION_REQUIRED` sí exige resolver el cobro. |
 | Retiro fiscal en el ERP | Si el despliegue del ERP tiene activo `POS_FISCAL_WORKFLOW_V2_ENABLED`. |
 
 «Copiar» pega el diagnóstico completo en un mensaje para soporte.
@@ -61,7 +64,8 @@ adb install -r Clic-Pos-<version>-release.apk
 ```
 
 1. Abrir **Diagnóstico fiscal** y comprobar «Retiro fiscal en el ERP: activo».
-2. Mirar «Cobros ligados al intento»: si dice `DECLINED`, cerrar el intento; si dice
+2. Mirar «Cobros ligados al intento» (pagos registrados) y «Payment intents» (respuesta del
+   proveedor): si el intento dice `DECLINED`, cerrar el intento; si dice
    `RECONCILIATION_REQUIRED` o `AUTHORIZED`, primero resolver el cobro con el voucher.
 3. **Cerrar intento pendiente** con un PIN de supervisor (`POS_CHECKOUT`).
 4. Cobrar de nuevo. La traza queda en Ajustes → **Traza de Auditoría**.

@@ -1,6 +1,7 @@
 import CheckoutTrackingSettings from './CheckoutTrackingSettings';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
 import { needsTerminalReauthorization, reauthorizeTerminal } from '../services/sync/TerminalReauthorizationService';
+import { reauthorizationHintText } from '../services/sync/ReauthorizationHint';
 import { resolveSyncTarget } from '../services/sync/SyncProfile';
 import { useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 
@@ -370,9 +371,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
     setIsReauthorizing(true);
     try {
       const result = await reauthorizeTerminal();
-      setReauthorizationHint(result.message);
-      const state = needsTerminalReauthorization();
-      setReauthorizationHint(state.required ? `Requerido: ${state.reason}` : 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+      // A deferred/failed reauthorization must keep its actionable reason visible (e.g. pending offline
+      // sales); never overwrite it in the same tick with the generic success hint.
+      setReauthorizationHint(reauthorizationHintText(result, needsTerminalReauthorization()));
     } finally {
       setIsReauthorizing(false);
     }
@@ -602,7 +603,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onClose={() => setCurrentView('HOME')}
             products={props.products}
             warehouses={props.warehouses}
-            isAdminMode={props.isAdminMode}
+            canManageTerminal={hasPermission('SETTINGS_HARDWARE')}
             currentDeviceId={props.currentDeviceId}
           />
         );

@@ -73,10 +73,14 @@ test('changed table source, absent atomic settlement and competing checkout cann
   assert.equal(count(f,'sync_outbox_v2'),0);assert.equal(f.sql.prepare("SELECT count(*) n FROM pos_fiscal_permits_v2 WHERE state='CONSUMED'").get()!.n,0);
  }finally{f.sql.close();}
 });
-test('clock rollback and observed binding change do not regain authority after restart or A→B→A',async()=>{
+test('clock rollback and a foreign fiscal identity quarantine the reserve instead of destroying it',async()=>{
  const f=await fixture();try{const now=Date.now;const observed=now();Date.now=()=>observed-60000;try{await assert.rejects(f.store.offlineLease(f.authority),/CLOCK_ROLLBACK/);}finally{Date.now=now;}
-  assert.equal(await f.store.offlineLease({...f.authority,bindingHash:'c'.repeat(64)}),null);
-  const reopened=new NativeFiscalWorkflowV2Store(()=>f.bridge,work=>work());assert.equal(await reopened.offlineLease(f.authority),null);
+  // A different fiscal identity is never accepted and never rewrites the stored grant: the old
+  // destructive read revoked it permanently, which destroyed valid offline comprobantes.
+  assert.equal(await f.store.offlineLease({...f.authority,issuerRnc:'999999999'}),null);
+  assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_leases_v1').get()!.revoked,0);
+  // The rightful identity keeps its reserve, also after reopening the store (no A→B→A needed).
+  const reopened=new NativeFiscalWorkflowV2Store(()=>f.bridge,work=>work());assert.equal((await reopened.offlineLease(f.authority))?.leaseId,f.lease.leaseId);
  }finally{f.sql.close();}
 });
 test('PREPARED expires before effects; a previously recorded same payment can reconcile after expiry without a new permit',async()=>{

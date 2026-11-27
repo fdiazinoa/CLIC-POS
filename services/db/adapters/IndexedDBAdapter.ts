@@ -476,6 +476,34 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         });
     }
 
+    async saveConfigIfUnchanged(expected: import('../../../types').BusinessConfig,
+        next: import('../../../types').BusinessConfig): Promise<boolean> {
+        const expectedJson = JSON.stringify(expected);
+        const updated = structuredClone({ ...next, id: 'current' });
+        if (this.isFallbackOnlyCollection('config') || !this.hasStore('config')) {
+            const rows = this.readFallbackCollection('config');
+            const index = rows.findIndex(row => row?.id === 'current');
+            if (index < 0 || JSON.stringify(rows[index]) !== expectedJson) return false;
+            rows[index] = updated;
+            this.writeFallbackCollection('config', rows);
+            return true;
+        }
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction('config', 'readwrite');
+            const store = transaction.objectStore('config');
+            const request = store.get('current');
+            let written = false;
+            transaction.oncomplete = () => resolve(written);
+            transaction.onabort = () => reject(transaction.error ?? new Error('CONFIG_REPAIR_WRITE_ABORTED'));
+            request.onsuccess = () => {
+                if (request.result && JSON.stringify(request.result) === expectedJson) {
+                    store.put(updated);
+                    written = true;
+                }
+            };
+        });
+    }
+
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
         if (collectionName === ATTENDANCE_COLLECTION) throw new Error('ATTENDANCE_IMMUTABLE_COLLECTION');
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
