@@ -451,7 +451,8 @@ export const buildEscPosTicketPayload = (
   config: BusinessConfig,
   users: Array<{ id: string; name: string }> = [],
   fiscalPrint?: FiscalPrintDisplay,
-): string | null => formatEscPosTicket(transaction, config, users, fiscalPrint);
+  paymentReceipt = false,
+): string | null => formatEscPosTicket(transaction, config, users, fiscalPrint, undefined, paymentReceipt);
 
 export const buildSignedE32QaTicketPayload = (
   transaction: Transaction,
@@ -474,6 +475,7 @@ const formatEscPosTicket = (
   users: Array<{ id: string; name: string }> = [],
   fiscalPrint?: FiscalPrintDisplay,
   qaEvidence?: FiscalPrintDisplay,
+  paymentReceipt = false,
 ): string | null => {
   if (!transaction?.items?.length) return null;
   const returnLines=returnSettlementLines(transaction);
@@ -506,7 +508,7 @@ const formatEscPosTicket = (
   };
 
   const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
-  const documentTitle = isCreditNote
+  const documentTitle = paymentReceipt ? 'CONSTANCIA DE PAGO' : isCreditNote
     ? 'NOTA DE CREDITO'
     : transaction.ncfType
       ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA')
@@ -523,11 +525,12 @@ const formatEscPosTicket = (
     : [];
 
   buildReceiptHeader(chunks, config, documentTitle, width);
+  if (paymentReceipt) pushTextLines(chunks, splitLines('SIN VALIDEZ FISCAL', width));
 
   pushPair(chunks, `Ticket: ${transaction.displayId || transaction.id}`, new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width);
   pushTextLines(chunks, splitLines(new Date(transaction.date).toLocaleDateString(), width));
   const shouldPrintOrderNumber = Boolean(config.receiptConfig?.showOrderNumber && transaction.orderNumber);
-  const shouldPrintQr = Boolean(config.receiptConfig?.showQr && qrPayload);
+  const shouldPrintQr = Boolean(!paymentReceipt && config.receiptConfig?.showQr && qrPayload);
 
   if (shouldPrintOrderNumber && !shouldPrintQr) {
     pushTextLines(chunks, splitLines(`No. Orden: ${transaction.orderNumber}`, width));
@@ -697,7 +700,7 @@ const formatEscPosTicket = (
 
   chunks.push(divider(width));
   const signedEvidence = isVerifiedFiscalPrintDisplay(fiscalPrint) ? fiscalPrint : qaEvidence;
-  if (signedEvidence) {
+  if (signedEvidence && !paymentReceipt) {
     chunks.push(align(1));pushTextLines(chunks,splitLines('COMPROBANTE ELECTRONICO FIRMADO',width));
     pushTextLines(chunks,splitLines(signedEvidence.certifiedNcf,width));pushQrCode(chunks,signedEvidence.qrUrl);
     pushTextLines(chunks,splitLines(`Codigo de seguridad: ${signedEvidence.securityCode}`,width));

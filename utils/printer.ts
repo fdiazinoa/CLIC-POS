@@ -2,7 +2,7 @@ import {verifyReturnSettlementPresentation,returnSettlementLines} from '../servi
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
-import { fiscalPrintTransaction, isVerifiedFiscalPrintDisplay, MSELLER_PRINT_WAIT_MS, requiresMSellerPrintSignature, resolveFiscalPrintReadiness, terminalUsesMSellerRealtimePrint, type FiscalPrintDisplay } from '../services/fiscal/FiscalPrintEvidence';
+import { canPrintMSellerPaymentReceipt, fiscalPrintTransaction, isVerifiedFiscalPrintDisplay, MSELLER_PRINT_WAIT_MS, requiresMSellerPrintSignature, resolveFiscalPrintReadiness, terminalUsesMSellerRealtimePrint, type FiscalPrintDisplay } from '../services/fiscal/FiscalPrintEvidence';
 import {decideFiscalReturnPrint} from '../services/fiscal/ReturnFiscalState';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
@@ -263,12 +263,11 @@ export interface PrintTicketOptions {
     onFiscalPending?: () => void;
 }
 
-const readPrintTransaction = async (transaction: Transaction): Promise<Transaction> =>
-    await dbAdapter.getDocument<Transaction>('transactions', transaction.id)
-    || await dbAdapter.getDocument<Transaction>('transactionHistory', transaction.id)
-    || transaction;
+const readPrintTransaction = async (id: string) =>
+    await dbAdapter.getDocument<Transaction>('transactions', id)
+    || await dbAdapter.getDocument<Transaction>('transactionHistory', id);
 
-const printTicketInternal = async (transaction: Transaction, config: BusinessConfig, fiscalPrint?: FiscalPrintDisplay): Promise<boolean> => {
+const printTicketInternal = async (transaction: Transaction, config: BusinessConfig, fiscalPrint?: FiscalPrintDisplay, paymentReceipt = false): Promise<boolean> => {
     const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
@@ -315,7 +314,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     };
 
     const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
-    const documentTitle = isCreditNote
+    const documentTitle = paymentReceipt ? 'CONSTANCIA DE PAGO' : isCreditNote
         ? 'NOTA DE CRÉDITO'
         : transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
     const globalDiscountLabel = resolveGlobalDiscountLabel({
@@ -328,7 +327,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     const copies = resolveConfiguredPrintCopies(config, resolveTransactionPrintKind(transaction));
     const qrPayload = String(transaction.displayId || transaction.id || '').trim();
     const fiscalSvg=fiscalPrint?await fiscalQrSvg(fiscalPrint.qrUrl):'';
-    const internalSvg=receiptConfig?.showQr&&qrPayload?await fiscalQrSvg(qrPayload,100):'';
+    const internalSvg=!paymentReceipt&&receiptConfig?.showQr&&qrPayload?await fiscalQrSvg(qrPayload,100):'';
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
@@ -436,11 +435,12 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             
             <div class="text-center">
                 <div class="doc-title">${documentTitle}</div>
+                ${paymentReceipt ? '<strong>SIN VALIDEZ FISCAL</strong>' : ''}
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
-                ${receiptConfig?.showOrderNumber && transaction.orderNumber && !receiptConfig?.showQr ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
+                ${receiptConfig?.showOrderNumber && transaction.orderNumber && (paymentReceipt || !receiptConfig?.showQr) ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
                 ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
                 <div class="meta-row">Cajero: ${escapeFiscal(receiptSaleOperator(transaction))}</div>
                 ${receiptUsesRestaurantService(config, transaction.terminalId) && transaction.serviceType ? `<div class="meta-row" style="font-weight: bold;">Tipo de servicio: ${transaction.serviceType === 'TAKEOUT' ? 'Para llevar' : transaction.serviceType === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa'}</div>` : ''}
@@ -628,7 +628,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 <div>¡Gracias por su compra!</div>
                 <div>Vuelva pronto.</div>
                 
-                ${receiptConfig?.showQr ? `
+                ${!paymentReceipt && receiptConfig?.showQr ? `
                 <div class="divider"></div>
                 <div style="text-align: left; margin: 6px 0;">
                     ${transaction.ncfType ? `<div style="font-weight: bold; font-size: 12px;">${comprobanteTypeLabels[transaction.ncfType] || transaction.ncfType}</div>` : ''}
@@ -657,7 +657,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
         ''
     );
 
-    const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users, fiscalPrint);
+    const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users, fiscalPrint, paymentReceipt);
+    const printReference = paymentReceipt ? `${transaction.id}:payment-receipt` : transaction.id;
     let printedSilently = false;
 
     if (escPosBase64) {
@@ -667,7 +668,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             role: 'TICKET',
             terminalId: transaction.terminalId,
             jobType: 'TICKET',
-            referenceId: transaction.id,
+            referenceId: printReference,
             copies,
         });
     }
@@ -681,7 +682,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             role: 'TICKET',
             terminalId: transaction.terminalId,
             jobType: 'TICKET',
-            referenceId: transaction.id,
+            referenceId: printReference,
             copies,
         });
     }
@@ -1335,8 +1336,11 @@ const pendingTickets = new Map<string, Promise<boolean>>();
 export const printTicket = (requested: Transaction, config: BusinessConfig, vouchers?: Promise<unknown>, options: PrintTicketOptions = {}): Promise<boolean> => {
     const existing = pendingTickets.get(requested.id);
     if (existing) return existing;
+    let printedPaymentReceipt = false;
     const request = trackCheckoutPrint({transactionId:requested.id,displayId:requested.displayId,items:requested.items,total:requested.total,reason:'TICKET'}, async () => {
-        const transaction = await readPrintTransaction(requested);
+        const retained = await readPrintTransaction(requested.id);
+        const transaction = retained || requested;
+        const allowPaymentReceipt = canPrintMSellerPaymentReceipt(retained);
         await verifyReturnSettlementPresentation(transaction);
         await vouchers;
         const waitForSignature = requiresMSellerPrintSignature(transaction);
@@ -1350,10 +1354,16 @@ export const printTicket = (requested: Transaction, config: BusinessConfig, vouc
         try {
             performance.mark(`clic-qa:fiscal-print-start:${transaction.ncf}`);
             const fiscalPrint = await resolveFiscalPrintReadiness(transaction, {
-                waitForSignature, useRealtimeHint, timeoutMs: useRealtimeHint ? undefined : options.fiscalWaitMs, signal: controller?.signal,
+                waitForSignature, useRealtimeHint, timeoutMs: useRealtimeHint ? undefined : options.fiscalWaitMs, signal: controller?.signal, allowPaymentReceipt,
             });
             performance.mark(`clic-qa:fiscal-print-${fiscalPrint ? fiscalPrint.dgiiAccepted ? 'signed-accepted' : 'signed-pending' : 'unavailable'}:${transaction.ncf}`);
-            if (waitForSignature && !isVerifiedFiscalPrintDisplay(fiscalPrint)) throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED');
+            if (waitForSignature && !isVerifiedFiscalPrintDisplay(fiscalPrint)) {
+                if (!allowPaymentReceipt) throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED');
+                options.onFiscalPending?.();
+                printedPaymentReceipt = await runPrintTask(`payment-receipt:${transaction.id}`, 'Constancia de pago',
+                    () => printTicketInternal(transaction, config, undefined, true));
+                return printedPaymentReceipt;
+            }
             const returnPrint = decideFiscalReturnPrint(transaction, isVerifiedFiscalPrintDisplay(fiscalPrint));
             if (!returnPrint.allowed) throw new PrintOutputError(returnPrint.code || 'FISCAL_RETURN_SIGNED_QR_REQUIRED');
             if (!fiscalPrint) options.onFiscalPending?.();
@@ -1375,7 +1385,7 @@ export const printTicket = (requested: Transaction, config: BusinessConfig, vouc
             clearTimeout(timer);
         }
     }).then(async accepted => {
-        if (accepted && config.receiptConfig?.printCouponSlip) {
+        if (accepted && !printedPaymentReceipt && config.receiptConfig?.printCouponSlip) {
             try { await printCouponForTransaction(requested, config, false); }
             catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
         }
