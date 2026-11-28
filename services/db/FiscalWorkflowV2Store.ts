@@ -89,13 +89,15 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
   * checkout stay fenced, so the same identity can never be reused. */
  async releaseAttemptWithoutErp(expected:FiscalWorkflowCheckoutV2,actor:string,options:{releasedPayments?:string[]}={}):Promise<void>{await this.transaction(async sql=>{
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
-  if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.permitId||!['PREPARED','EFFECT_POSSIBLE'].includes(expected.phase))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
-  if(!expected.operationId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expected.operationId))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  if(!row||row.checkout_json!==JSON.stringify(expected))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: CURRENT_CHECKOUT_MISMATCH');
+  if(!expected.permit?.permitId)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: MISSING_PERMIT');
+  if(!['PREPARED','EFFECT_POSSIBLE'].includes(expected.phase))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: PHASE_NOT_RELEASABLE');
+  if(!expected.operationId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expected.operationId))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: INVALID_OPERATION_ID');
   await assertRetirementHasNoEffects(sql,{transactionId:expected.transactionId,checkoutId:expected.checkoutId,permitId:expected.permit.permitId},{targetedQueues:true,releasedPayments:options.releasedPayments});
-  if(actor.length<2||actor.length>120)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  if(actor.length<2||actor.length>120)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: INVALID_SUPERVISOR');
   await sql.run("INSERT INTO pos_fiscal_attempt_releases_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,phase,actor,created_at,reason)VALUES(?,?,?,?,?,?,?,?,'ERP_RETIREMENT_UNAVAILABLE')",[expected.checkoutId,expected.transactionId,expected.permit.permitId,expected.scopeKey,expected.operationId,expected.phase,actor,new Date().toISOString()],false);
   await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[expected.scopeKey,expected.checkoutId],false);
-  if(Number((await sql.query('SELECT changes() count')).values?.[0]?.count)!==1)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  if(Number((await sql.query('SELECT changes() count')).values?.[0]?.count)!==1)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: CURRENT_CHECKOUT_DELETE_MISMATCH');
  });}
  async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2,options:{allowOfflineEffect?:boolean}={}):Promise<void>{await this.transaction(async sql=>{
   const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}

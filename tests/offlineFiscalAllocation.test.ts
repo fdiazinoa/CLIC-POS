@@ -310,6 +310,34 @@ test('old ERP or V2 OFF keeps the real V1 fallback and reports disabled preparat
  await assert.rejects(client.prepareOfflineAuthority(),/FISCAL_OFFLINE_DISABLED/);assert.equal(paths.length,2);assert.equal((await client.offlineReadiness()).reason,'PREPARATION_DISABLED');assert.equal((await client.offlineReadiness()).code,'FISCAL_OFFLINE_DISABLED');assert.equal(f.count('pos_fiscal_permits_v2'),0);assert.equal(f.count('pos_offline_fiscal_allocations_v2'),0);
  }finally{f.sql.close();}});
 
+test('diagnostics explain why a V2 allocation with a possible payment cannot be released as a permit', async () => {
+ const f = await fixture();
+ try {
+  const checkout = await f.client().reserveOfflineCheckout(identity('release-diagnostics'), uuid(90));
+  await f.client().recordPayment(checkout, 'original-payment');
+  assert.equal(checkout.permit, null);
+  const pendingNumber = f.sql.prepare('SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?');
+  const originalClaim = pendingNumber.get(checkout.checkoutId);
+  assert.equal(originalClaim!.state, 'EFFECT_POSSIBLE');
+
+  const client = createFiscalWorkflowV2Client({
+   store: () => f.store,
+   readOfflineAuthority: async () => f.local,
+   readAuth: () => ({ base: 'https://synthetic.invalid/api/sync', headers: {}, descriptor: scope, assertCurrent() {} }),
+   fetchImpl: async () => { throw Error('NO_NETWORK_ALLOWED'); },
+  } as any);
+  assert.equal((await client.diagnostics()).attemptAuthority, 'V2_ALLOCATION');
+  const outcome = await client.releasePendingAttempt('Fixture supervisor');
+  assert.equal(outcome.released, false);
+  assert.match(outcome.note, /FISCAL_ATTEMPT_RELEASE_NOT_SAFE: MISSING_PERMIT$/);
+  assert.deepEqual(await f.store.currentCheckout(checkout.scopeKey), checkout);
+  assert.deepEqual(pendingNumber.get(checkout.checkoutId), originalClaim);
+  assert.equal(f.count('pos_fiscal_attempt_releases_v1'), 0);
+  assert.equal(f.count('sync_outbox_v2'), 0);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM documents WHERE collection_name IN ('transactions','transactionHistory','nativeFiscalReservations')").get()!.n, 0);
+ } finally { f.sql.close(); }
+});
+
 test('additive authority expansion preserves original PREPARED and possible-payment identities after restart',async()=>{
  for(const effects of [false,true]){const f=await fixture();try{
  const c=await f.client().reserveOfflineCheckout(identity('expansion'),'op');if(effects)await f.client().recordPayment(c,'payment-'+c.checkoutId);
