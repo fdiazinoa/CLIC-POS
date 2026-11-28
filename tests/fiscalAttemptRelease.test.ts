@@ -150,7 +150,7 @@ test('a supervisor can free the box when the ERP retirement service is unavailab
     const refused = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000005'], cartIdentity: 'another-cart' });
     assert.equal(refused.cancelled, false);
     const record = (await f.store.currentCheckout(key))!;
-    await assert.rejects(f.store.releaseAttemptWithoutErp!(record, ''), /NOT_SAFE/);
+    await assert.rejects(f.store.releaseAttemptWithoutErp!(record, ''), { message: 'FISCAL_ATTEMPT_RELEASE_NOT_SAFE: INVALID_SUPERVISOR' });
     await f.store.releaseAttemptWithoutErp!(record, 'Yuli (user-1)');
     assert.equal(await f.store.currentCheckout(key), null);
     const audit = f.sql.prepare('SELECT actor,phase,reason FROM pos_fiscal_attempt_releases_v1').get() as any;

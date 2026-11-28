@@ -19,6 +19,7 @@ import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,ass
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,reserveFiscalWorkflowCheckoutInTransaction,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
+import { ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA } from '../AbsoluteFiscalRecoveryStore';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
@@ -1643,6 +1644,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
+            ${ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}
@@ -1980,6 +1982,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 [current.syncId, current.syncVersion, binding, syncId, syncVersion, inventoryVersion, cursor]);
               if (!receipt.values?.length) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
             }
+            const verifiedReturnHistory = verifiedFiscalReturnSource && mutation.requireAbsent &&
+                mutation.collectionName === 'transactionHistory' && document.id === verifiedFiscalReturnSource.document.id &&
+                JSON.stringify(mutation.v3ExpectedRetainedDocument) === JSON.stringify(verifiedFiscalReturnSource.v3ExpectedRetainedDocument) &&
+                JSON.stringify(document) === JSON.stringify(verifiedFiscalReturnSource.document);
+            const verifiedReturn = mutation === verifiedFiscalReturnSource || verifiedReturnHistory;
             for (const line of document.items || []) {
               // A sealed E34 proves its replenishment inside this write transaction.
               // Coverage of a live balance is still required for other checkout writes.
@@ -2026,8 +2033,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const sources = source.lines.get(JSON.stringify([sourceLineId,line.id])) || [];
                 if (formatSourceLine && (source.document.articleFormatEventId !== document.articleFormatWire?.source_event_id
                   || JSON.stringify(sources[0]?.articleFormat) !== JSON.stringify(line.articleFormat))) throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
-                if (sources.length !== 1 || !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
-                  document.documentType === 'REFUND')) {
+                if (sources.length !== 1 || (!verifiedReturn && !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
+                  document.documentType === 'REFUND'))) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
                 if (!['transactions','transactionHistory'].includes(context.collection)) {

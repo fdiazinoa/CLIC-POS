@@ -30,3 +30,12 @@ export const stableCheckoutAttemptId = (cartKey: string, createId: () => string)
   write({ ...Object.fromEntries(entries), [key]: id });
   return id;
 };
+
+export const forgetStableCheckoutAttemptIdIfMatches = (cartKey: string, retiredId: string): void => {
+  const key = cartKey.trim();
+  if (!key || !retiredId) return;
+  const map = read();
+  if (!Object.hasOwn(map, key) || map[key] !== retiredId) return;
+  delete map[key];
+  write(map);
+};

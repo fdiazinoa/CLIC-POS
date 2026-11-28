@@ -1,3 +1,4 @@
+import { assertSealedReturnOriginalLine } from '../fiscal/RetainedReturnLine';
 import { markSettingsReturnV3Failure, measureSettingsReturnQa } from '../../settingsReturnQaTrace';
 import { markInteractionStage, measureInteractionStage, type PosInteractionTrace } from '../../utils/interactionPerformance';
 import { v3ConfigScopeChangeReason, v3OperationalConfigContext, type V3OperationalAuthorityConfig } from './LargeMasterSyncV3OperationalConfigScope';
@@ -514,6 +515,7 @@ export class LargeMasterSyncV3OperationalSession {
     }
     const authority = lines[0].v3SaleAuthority;
     const refund = intent === 'REFUND';
+    const sealedReturnPreparation = reference?.sealedReturnPreparation;
     // A credit note reverses the invoice as issued, so the ticket's own inventory authority is the
     // anchor. Only a sale/checkout has to match the live baseline.
     if (!authority || authority.binding !== this.binding || authority.warehouseId !== warehouseId
@@ -556,7 +558,12 @@ export class LargeMasterSyncV3OperationalSession {
         throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
       }
       // A refund is authorized by the independently read original even when its catalog is still current.
-      if (refund) assertV3RetainedLine(line, retained, true);
+      if (refund && sealedReturnPreparation) {
+        if (!retained || sealedReturnPreparation.originalReference.transactionId !== retained.id) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+        }
+        assertSealedReturnOriginalLine(retained.items, line, sealedReturnPreparation);
+      } else if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
         return readCurrentArticle(line.id, trace);
       }
