@@ -44,6 +44,7 @@ const { db } = await import('../utils/db');
 const { dbAdapter } = await import('../services/db');
 const lifecycle = await import('../utils/erpSyncLifecycle');
 const { resolvePosSalesStartView } = await import('../utils/posStartupView');
+const { calculatePointsEarned } = await import('../utils/loyaltyEngine');
 
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const taxId = '7e70f4fd-240d-4665-99c9-603f3615ee0e';
@@ -555,6 +556,71 @@ test('maps nested loyalty into BusinessConfig and legacy loyalty collections', a
     assert.deepEqual(writes.find((write) => write.collection === 'campaigns')?.value, []);
     assert.deepEqual(writes.find((write) => write.collection === 'coupons')?.value, []);
     assert.equal((writes.find((write) => write.collection === 'config')?.value as any).loyalty.earnRate, 2);
+});
+
+test('an ERP loyalty push stores OFF before ACK and stops the checkout points preview', async () => {
+    const { config } = resetHarness();
+    const cart = [{ price: 100, quantity: 1 }] as Parameters<typeof calculatePointsEarned>[0];
+    assert.equal(calculatePointsEarned(cart, config), 10);
+
+    const { result, acks } = await runEvent({
+        id: 'disable-loyalty', scopes: ['loyalty'], versions: { loyalty: 2 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+        onAck: (ack) => {
+            assert.equal(ack.status, 'APPLIED');
+            assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, false);
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+    const updatedConfig = collections.get('config') as typeof config;
+    assert.equal(updatedConfig.loyalty?.isEnabled, false);
+    assert.equal(calculatePointsEarned(cart, updatedConfig), 0);
+});
+
+test('out-of-order loyalty and mixed terminal ACKs cannot undo a newer OFF rule', async () => {
+    const { config } = resetHarness();
+    const on = config.loyalty;
+    const off = { ...on, isEnabled: false };
+    const loyalty = (version: number, rule: unknown) => runEvent({
+        id: `loyalty-order-${version}`, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { loyalty: { config: rule } } },
+    });
+    const savedConfig = () => collections.get('config') as typeof config;
+    const savedVersion = () => lifecycle.getConfigPushV2Diagnostics().domainVersions.loyalty;
+
+    assert.equal((await loyalty(5, off)).acks[0].status, 'APPLIED');
+    const oldest = await loyalty(3, on);
+    assert.equal(oldest.acks[0].status, 'APPLIED');
+    assert.deepEqual(oldest.snapshotUrls, []);
+    assert.equal(savedVersion(), 5);
+
+    const scope = ['terminal_config', 'loyalty'];
+    const versions = { terminal_config: 2, loyalty: 4 };
+    const mixedEvent = makeEvent('mixed-old-loyalty', scope, versions);
+    const mixed = await runEvent({
+        id: mixedEvent.id, scopes: scope, versions,
+        snapshotResponses: [Response.json({
+            status: 'success', snapshot_id: mixedEvent.payload.snapshot_id,
+            version_hash: mixedEvent.payload.version_hash, versions, scopes: ['terminal_config'],
+            domains: { terminal_config: {
+                terminal: { terminal_id: terminalId, config: { loyalty: on, session: { autoLockMinutes: 9 } } },
+                resolved: { loyalty: { config: on } },
+            } },
+        })],
+    });
+    assert.equal(mixed.acks[0].status, 'APPLIED');
+    assert.equal(lifecycle.getConfigPushV2Diagnostics().domainVersions.terminal_config, 2);
+    assert.equal(savedVersion(), 5);
+    assert.equal(savedConfig().loyalty?.isEnabled, false);
+
+    assert.deepEqual((await loyalty(4, on)).snapshotUrls, []);
+    assert.equal(savedVersion(), 5);
+    assert.equal(savedConfig().loyalty?.isEnabled, false);
+    assert.equal((await loyalty(6, on)).acks[0].status, 'APPLIED');
+    assert.equal(savedVersion(), 6);
+    assert.equal(savedConfig().loyalty?.isEnabled, true);
 });
 
 test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', async () => {

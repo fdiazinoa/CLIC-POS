@@ -1,5 +1,6 @@
 import { beginSettingsReturnQa } from './settingsReturnQaTrace';
 import { persistTerminalAssignmentRepair } from './services/identity/configRepairPersistence';
+import { isErpLoyaltyManaged, saveLocalConfigPreservingErpLoyalty } from './utils/loyaltyConfigAuthority';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -1725,6 +1726,10 @@ const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
 const isErpManagedPosUserRuntime = (): boolean => (
   getStoredTerminalSetupMode() === 'SERVER_ERP'
   || localStorage.getItem('clic_sync_mode') === 'POS_ERP'
+);
+
+const isErpManagedLoyaltyRuntime = (): boolean => (
+  getStoredTerminalSetupMode() === 'SERVER_ERP' || isErpLoyaltyManaged(loadSyncProfile())
 );
 
 const visiblePosUsersForRuntime = (users: unknown): User[] => selectPosUsersForRuntime(users, {
@@ -10129,9 +10134,18 @@ const AppContent: React.FC = () => {
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
     console.log("handleConfigUpdate called", newConfig); // Debug log
     const tenantCompanyConfig = normalizeCompanyInfoFromTenantIdentity(newConfig);
-    const configToSave = tenantCompanyConfig.config as BusinessConfig;
+    const localUpdate = tenantCompanyConfig.config as BusinessConfig;
+    const erpManagedLoyalty = isErpManagedLoyaltyRuntime();
+    const configToSave = erpManagedLoyalty
+      ? await saveLocalConfigPreservingErpLoyalty(dbAdapter, localUpdate)
+      : localUpdate;
+    if (!configToSave) {
+      console.warn('No se pudo guardar la configuración local mientras se sincronizaba el ERP.');
+      return;
+    }
     setConfig(configToSave);
-    await db.save('config', configToSave);
+    if (!erpManagedLoyalty) await db.save('config', configToSave);
+    const configForServices = erpManagedLoyalty ? configToSave : newConfig;
 
     // Initial Startup Logic for Floor Plan
     const activeTerminal = (configToSave.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -10144,20 +10158,20 @@ const AppContent: React.FC = () => {
     const currentTerminal = (configToSave.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     if (currentTerminal) {
       console.log(`🔄 Re-initializing services for terminal ${currentTerminal.id} after config update...`);
-      permissionService.initialize(newConfig, currentTerminal.id);
-      authLevelService.init(newConfig, currentTerminal.id);
-      terminalRouter.init(newConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
+      permissionService.initialize(configForServices, currentTerminal.id);
+      authLevelService.init(configForServices, currentTerminal.id);
+      terminalRouter.init(configForServices, currentTerminal.id, currentTerminal.config.deviceRole || null);
 
       // CRITICAL: Re-initialize SyncManager to avoid "Sync configuration missing"
       try {
-        await syncManager.initialize(newConfig, currentTerminal.id);
+        await syncManager.initialize(configForServices, currentTerminal.id);
         await backgroundSyncManager.initialize();
       } catch (e) {
         console.error("❌ Failed to re-initialize sync services:", e);
       }
     }
 
-    await syncConfigToLocalServer(newConfig);
+    await syncConfigToLocalServer(configForServices);
   };
 
   const handleUsersUpdate = async (newUsers: User[]) => {
@@ -14837,6 +14851,7 @@ const AppContent: React.FC = () => {
             }}
             currentDeviceId={deviceId}
             erpRoleAuthority={isErpManagedPosUserRuntime()}
+            erpLoyaltyAuthority={isErpManagedLoyaltyRuntime()}
             onUpdateRooms={async (newRooms) => { setRooms(newRooms); await db.save('rooms', newRooms); }}
           />
         );
@@ -14908,6 +14923,7 @@ const AppContent: React.FC = () => {
             currentDeviceId={deviceId}
             terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
             erpRoleAuthority={isErpManagedPosUserRuntime()}
+            erpLoyaltyAuthority={isErpManagedLoyaltyRuntime()}
           />
         );
 

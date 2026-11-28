@@ -653,14 +653,17 @@ const buildConfigWriteFromSnapshot = async (
     const terminal = asObject<Record<string, unknown>>(domain.terminal);
     const terminalId = resolveConfigPushV2TerminalId(domain);
     if (!terminalId) return null;
+    const config = {
+        ...asObject<Record<string, unknown>>(domain.config),
+        ...asObject<Record<string, unknown>>(terminal.config),
+    };
+    // CONFIG_PUSH_V2 publishes loyalty through its own versioned domain.
+    delete config.loyalty;
     const incomingSnapshot = {
         ...domain,
         ...terminal,
         terminal_id: terminal.terminal_id || terminal.id || terminalId,
-        config: {
-            ...asObject<Record<string, unknown>>(domain.config),
-            ...asObject<Record<string, unknown>>(terminal.config),
-        },
+        config,
         resolved,
     };
     const baseline = applyTerminalConfigSnapshot(localConfig as any, {
@@ -737,7 +740,9 @@ export const buildConfigPushV2DomainWrites = async (
         });
         if (configWrite) writes.set(configWrite.collection, configWrite.value);
     } else if (scope === 'terminal_config') {
-        const configWrite = await buildConfigWriteFromSnapshot(domain, asObject<Record<string, unknown>>(domain.resolved));
+        const resolved = { ...asObject<Record<string, unknown>>(domain.resolved) };
+        delete resolved.loyalty;
+        const configWrite = await buildConfigWriteFromSnapshot(domain, resolved);
         if (configWrite) writes.set(configWrite.collection, configWrite.value);
     } else if (scope === 'loyalty') {
         for (const collection of CONFIG_PUSH_V2_DOMAIN_COLLECTIONS.loyalty) {
@@ -1180,7 +1185,8 @@ const processConfigPushV2Event = async (
             versionHash,
             domainVersions: {
                 ...(state.domainVersions || {}),
-                ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || 0)])),
+                ...Object.fromEntries(scopes.filter(scope => scope !== 'loyalty')
+                    .map(scope => [scope, Number(versions[scope] || 0)])),
             },
             appliedAt: new Date().toISOString(),
             inFlight: readConfigPushV2State().inFlight,
@@ -1355,7 +1361,8 @@ const processConfigPushV2Event = async (
                 versionHash,
                 domainVersions: {
                     ...nextDomainVersions,
-                    ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || nextDomainVersions[scope] || 0)])),
+                    ...Object.fromEntries(scopes.filter(scope => scope !== 'loyalty')
+                        .map(scope => [scope, Number(versions[scope] || nextDomainVersions[scope] || 0)])),
                 },
                 appliedAt: new Date().toISOString(),
                 inFlight: readConfigPushV2State().inFlight,

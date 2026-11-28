@@ -3112,7 +3112,9 @@ export const applyTerminalConfigSnapshot = (
     visibleWarehouseIds: effectiveAllowedWarehouseIds,
   };
 
-  if (hasIncomingLoyaltyConfig) {
+  const staleLoyaltyEnable = snapshotSource === 'cached_snapshot'
+    && baseConfig.loyalty?.isEnabled === false && loyaltyConfig?.isEnabled === true;
+  if (hasIncomingLoyaltyConfig && !staleLoyaltyEnable) {
     nextConfig.loyalty = loyaltyConfig || nextConfig.loyalty;
   }
 
