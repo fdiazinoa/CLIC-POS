@@ -6,6 +6,7 @@ import {
   PaymentIntegrationDefinition,
 } from '../../types';
 import { db } from '../../utils/db';
+import { updateCurrentBusinessConfig } from '../../utils/loyaltyConfigAuthority';
 
 const MAX_AUDIT_EVENTS_PER_INTEGRATION = 200;
 
@@ -115,11 +116,6 @@ const emitConfigUpdated = (nextConfig: BusinessConfig): void => {
   }
 };
 
-export const persistConfigUpdate = async (nextConfig: BusinessConfig): Promise<void> => {
-  await db.save('config', nextConfig);
-  emitConfigUpdated(nextConfig);
-};
-
 export const dispatchAuditEventConfigUpdate = async (
   config: BusinessConfig | undefined,
   integrationId: string,
@@ -127,19 +123,7 @@ export const dispatchAuditEventConfigUpdate = async (
 ) : Promise<BusinessConfig | null> => {
   if (!config) return null;
 
-  const persistedConfig = await db.get('config');
-  const baseConfig = (
-    persistedConfig &&
-    !Array.isArray(persistedConfig) &&
-    typeof persistedConfig === 'object' &&
-    Array.isArray((persistedConfig as BusinessConfig).terminals)
-  )
-    ? persistedConfig as BusinessConfig
-    : config;
-
-  const nextConfig = appendAuditEventToConfig(baseConfig, integrationId, event);
-  if (nextConfig === baseConfig) return null;
-
-  await persistConfigUpdate(nextConfig);
-  return nextConfig;
+  return updateCurrentBusinessConfig(
+    db, config, current => appendAuditEventToConfig(current, integrationId, event), emitConfigUpdated,
+  );
 };

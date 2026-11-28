@@ -1232,7 +1232,12 @@ export interface LoyaltyConfig {
   tiers?: LoyaltyTier[];
 }
 
-
+export interface ErpLoyaltyPolicyVersion {
+  tenantId: string;
+  terminalId: string;
+  storeId: string | null;
+  version: number;
+}
 
 export interface UnitDefinition {
   code: string;
@@ -1277,6 +1282,7 @@ export interface BusinessConfig {
   };
   units?: UnitDefinition[]; // NEW: Centralized units list
   loyalty?: LoyaltyConfig;
+  erpLoyaltyPolicyVersion?: ErpLoyaltyPolicyVersion;
   companyInfo: CompanyInfo;
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];

@@ -55,7 +55,7 @@ import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks
 import { getTableLatencyQaState, subscribeTableLatencyQa, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
 import { catalogViewportWindow } from '../utils/catalogViewportWindow';
 import { MobilePosNavigation } from './MobilePosNavigation';
-import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
    Search, Trash2, MoreVertical,
@@ -110,6 +110,7 @@ import { transactionService } from '../services/transactionService';
 import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
+import { getEffectiveLoyaltyConfig, subscribeErpLoyaltyBindingStore } from '../utils/loyaltyConfigAuthority';
 import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
@@ -5746,7 +5747,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSuccessToast(`Reserva ${reservation.code} ${isEditingRecoveredReservation ? 'actualizada' : 'creada'}`);
    };
 
-   const pointsEarned = useMemo(() => calculatePointsEarned(processedCart, config), [processedCart, config]);
+   const loyaltyEnabled = useSyncExternalStore(
+      subscribeErpLoyaltyBindingStore,
+      () => Boolean(getEffectiveLoyaltyConfig(config)?.isEnabled),
+      () => Boolean(config.loyalty?.isEnabled),
+   );
+   const pointsEarned = useMemo(
+      () => loyaltyEnabled ? calculatePointsEarned(processedCart, config) : 0,
+      [processedCart, config, loyaltyEnabled],
+   );
    const primaryLoyaltyCard = selectedCustomer ? getPrimaryLoyaltyCard(selectedCustomer) : undefined;
    const currentPoints = primaryLoyaltyCard?.pointsBalance || 0;
 

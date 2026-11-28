@@ -152,6 +152,7 @@ interface SettingsProps {
   rooms: Room[];
   onUpdateRooms?: (rooms: Room[]) => void;
   erpRoleAuthority?: boolean;
+  erpLoyaltyAuthority?: boolean;
 }
 
 type SettingsView = 'POS_REPORTS' | 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'PRESENTATION_DIAGNOSTICS' | 'KDS_REPORTS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
@@ -656,6 +657,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <LoyaltySettings
             config={props.config}
+            erpManaged={props.erpLoyaltyAuthority}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
           />

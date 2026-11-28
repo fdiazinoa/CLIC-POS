@@ -5,23 +5,28 @@ import EmailPreviewModal from './EmailPreviewModal';
 
 interface LoyaltySettingsProps {
     config: BusinessConfig;
+    erpManaged?: boolean;
     onUpdateConfig: (newConfig: BusinessConfig) => void;
     onClose: () => void;
 }
 
-const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfig, onClose }) => {
-    const [loyaltyConfig, setLoyaltyConfig] = useState<LoyaltyConfig>(config.loyalty || {
-        isEnabled: false,
-        earnRate: 0.1, // Default: 1 point per $10 (0.1 points per $1)
-        redeemRate: 1.0, // Default: 1 point = $1.00
-        minRedemptionPoints: 10,
-        expirationMonths: 12,
-        excludedCategories: []
-    });
+const defaultLoyaltyConfig: LoyaltyConfig = {
+    isEnabled: false,
+    earnRate: 0.1,
+    redeemRate: 1,
+    minRedemptionPoints: 10,
+    expirationMonths: 12,
+    excludedCategories: [],
+};
+
+const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, erpManaged = false, onUpdateConfig, onClose }) => {
+    const [draft, setLoyaltyConfig] = useState<LoyaltyConfig>(config.loyalty ?? defaultLoyaltyConfig);
+    const loyaltyConfig = erpManaged ? config.loyalty ?? defaultLoyaltyConfig : draft;
 
     const [showEmailPreview, setShowEmailPreview] = useState(false);
 
     const handleSave = () => {
+        if (erpManaged) return;
         onUpdateConfig({
             ...config,
             loyalty: loyaltyConfig
@@ -41,15 +46,17 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                         <h2 className="text-2xl font-black text-gray-800 flex items-center gap-2">
                             <Award className="text-purple-600" /> Programa de Lealtad
                         </h2>
-                        <p className="text-sm text-gray-500">Configura las reglas de acumulación y canje de puntos.</p>
+                        <p className="text-sm text-gray-500">
+                            {erpManaged ? 'El ERP administra las reglas de este programa.' : 'Configura las reglas de acumulación y canje de puntos.'}
+                        </p>
                     </div>
                 </div>
-                <button
+                {!erpManaged && <button
                     onClick={handleSave}
                     className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all flex items-center gap-2"
                 >
                     <Save size={18} /> Guardar Cambios
-                </button>
+                </button>}
             </div>
 
             {/* Content */}
@@ -64,6 +71,7 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                     <label className="relative inline-flex items-center cursor-pointer">
                         <input
                             type="checkbox"
+                            disabled={erpManaged}
                             checked={loyaltyConfig.isEnabled}
                             onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, isEnabled: e.target.checked })}
                             className="sr-only peer"
@@ -88,6 +96,7 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="number"
+                                            disabled={erpManaged}
                                             step="0.01"
                                             value={loyaltyConfig.earnRate}
                                             onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, earnRate: parseFloat(e.target.value) })}
@@ -128,6 +137,7 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">{config.currencySymbol}</span>
                                             <input
                                                 type="number"
+                                                disabled={erpManaged}
                                                 step="0.01"
                                                 value={loyaltyConfig.redeemRate}
                                                 onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, redeemRate: parseFloat(e.target.value) })}
@@ -141,6 +151,7 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Mínimo para Canjear</label>
                                     <input
                                         type="number"
+                                        disabled={erpManaged}
                                         value={loyaltyConfig.minRedemptionPoints}
                                         onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, minRedemptionPoints: parseInt(e.target.value) })}
                                         className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-lg font-bold outline-none focus:ring-2 focus:ring-green-500"
@@ -161,6 +172,7 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Vencimiento de Puntos (Meses)</label>
                                 <input
                                     type="number"
+                                    disabled={erpManaged}
                                     value={loyaltyConfig.expirationMonths}
                                     onChange={(e) => setLoyaltyConfig({ ...loyaltyConfig, expirationMonths: parseInt(e.target.value) })}
                                     className="w-full max-w-xs p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-lg font-bold outline-none focus:ring-2 focus:ring-orange-500"
