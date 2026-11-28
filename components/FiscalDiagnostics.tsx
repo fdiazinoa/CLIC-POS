@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, ShieldCheck, ShieldAlert, Eraser, Loader2, ClipboardCopy } from 'lucide-react';
 import { clicConfirm, clicPrompt, clicAlert } from '../services/dialog/ClicDialogService';
 import type { RoleDefinition, User } from '../types';
+import type { AbsoluteFiscalRecoveryCandidate } from '../services/db/AbsoluteFiscalRecoveryStore';
 
 type Snapshot = Awaited<ReturnType<typeof readSnapshot>>;
 
@@ -35,12 +36,14 @@ const tone = (ok: boolean) => ok ? 'text-emerald-700 bg-emerald-50 border-emeral
  */
 export default function FiscalDiagnostics({ onClose, users = [], roles = [], currentUser = null }: { onClose: () => void; users?: User[]; roles?: RoleDefinition[]; currentUser?: User | null }) {
    const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | null>(null);
+   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | 'absolute-recovery' | null>(null);
    const [note, setNote] = useState('');
    const [releaseOffered, setReleaseOffered] = useState(false);
+   const [absoluteIdentity, setAbsoluteIdentity] = useState<AbsoluteFiscalRecoveryCandidate | null>(null);
 
    const refresh = useCallback(async () => {
       setBusy('refresh');
+      setAbsoluteIdentity(null);
       try { setSnapshot(await readSnapshot()); } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
    }, []);
@@ -59,14 +62,16 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
    };
 
    /** A supervisor with checkout permission authorizes the ERP retirement of a paid attempt. */
-   const requestSupervisor = async (): Promise<{ actorId: string; pin: string } | null> => {
+   const requestSupervisor = async (absoluteRecovery = false): Promise<{ actorId: string; pin: string } | null> => {
       const authorized = users.filter(user => {
          const role = roles.find(item => item.id === user.role);
-         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any);
+         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any) && (!absoluteRecovery || user.isActive !== false);
       });
-      const candidates = authorized.length ? authorized : currentUser ? [currentUser] : [];
+      const candidates = authorized.length ? authorized : !absoluteRecovery && currentUser ? [currentUser] : [];
       if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar el cierre del intento.'); return null; }
-      const pin = await clicPrompt('Este intento ya registró un cobro. Escribe el PIN de un supervisor con permiso de cobro para que el ERP confirme el cierre.', { inputType: 'password', required: true });
+      const pin = await clicPrompt(absoluteRecovery
+         ? 'Introduce el PIN de un supervisor con permiso de cobro para registrar esta liberación de Absolute.'
+         : 'Este intento ya registró un cobro. Escribe el PIN de un supervisor con permiso de cobro para que el ERP confirme el cierre.', { inputType: 'password', required: true });
       if (!pin) return null;
       const entered = String(pin).trim();
       const supervisor = candidates.find(user => String(user.pin) === entered);
@@ -135,6 +140,40 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       finally { setBusy(null); }
    };
 
+   const readAbsoluteIdentity = async () => {
+      setBusy('absolute-recovery');
+      setAbsoluteIdentity(null);
+      try {
+         const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+         const identity = await fiscalWorkflowV2Client.readAbsoluteRecoveryCandidate();
+         if (!identity) { setNote('El intento específico de Absolute ya no está disponible en esta caja.'); return; }
+         setAbsoluteIdentity(identity);
+      } catch { setNote('No se pudo verificar la identidad fiscal del intento de Absolute.'); }
+      finally { setBusy(null); }
+   };
+
+   const releaseAbsolute = async (candidate: AbsoluteFiscalRecoveryCandidate) => {
+      setBusy('absolute-recovery');
+      try {
+         const observed = await clicPrompt('Verifica que la venta quedó sin cobrar y que la transacción y su e-NCF no figuran en el ERP ni en MSeller. Escribe el e-NCF exacto de la verificación para confirmar.', { required: true });
+         if (observed === null) return;
+         if (observed.trim() !== candidate.ncf) { setNote('El e-NCF ingresado no coincide con el intento verificado.'); return; }
+         const confirmation = await clicPrompt('Introduce la confirmación firmada de la consulta al ERP y a MSeller.', { required: true });
+         if (confirmation === null) return;
+         if (!/^\d{13}\.[a-f0-9]{128}$/.test(confirmation.trim())) { setNote('El formato de la confirmación firmada no es válido.'); return; }
+         const operator = await requestSupervisor(true);
+         if (!operator) return;
+         const confirmed = await clicConfirm('¿Liberar el intento verificado de Absolute? Se conservarán el intento y la evidencia de la autorización.');
+         if (!confirmed) return;
+         const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+         await fiscalWorkflowV2Client.releaseAbsoluteRecovery(candidate, observed.trim(), confirmation.trim(), operator.actorId);
+         setAbsoluteIdentity(null);
+         setNote('Intento de Absolute liberado. Reinicia el POS y comprueba la disponibilidad E32 antes de abrir otra venta.');
+         setSnapshot(await readSnapshot());
+      } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
+      finally { setBusy(null); }
+   };
+
    const copy = async () => {
       if (!snapshot) return;
       const text = [
@@ -145,6 +184,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          `Reserva offline: ${snapshot.readiness} · lista: ${snapshot.offlineReady ? 'sí' : 'no'}`,
          `Motivo de la reserva: ${snapshot.reserveReason || 'no aplica'}`,
          `Intento fiscal: ${snapshot.attempt}`,
+         ...(snapshot.attemptAuthority ? [`Autoridad del intento: ${snapshot.attemptAuthority}`] : []),
          `Cobros ligados al intento: ${snapshot.payments || 'sin pagos'}`,
          `Payment intents: ${snapshot.paymentIntents || 'sin intentos de pago'}`,
          `Retiro fiscal en el ERP: ${snapshot.erpRetirement || 'sin consultar'}`,
@@ -165,6 +205,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       ...(snapshot.reserveAvailable ? [] : [{ label: 'Motivo de la reserva', value: snapshot.reserveReason || 'MISSING_AUTHORIZATION', ok: false }]),
       ...(snapshot.e32 ? [{ label: 'E32 para cobrar', value: snapshot.e32.value, ok: snapshot.e32.available }] : []),
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
+      ...(snapshot.attemptAuthority ? [{ label: 'Autoridad del intento', value: snapshot.attemptAuthority, ok: snapshot.attemptAuthority !== 'NO_CONTRACT' }] : []),
       { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin pagos', ok: /^(sin pagos|sin intento)$/i.test(snapshot.payments || 'sin pagos') },
       { label: 'Payment intents', value: snapshot.paymentIntents || 'sin intentos de pago', ok: /sin intento|DECLINED/i.test(snapshot.paymentIntents || 'sin intentos de pago') },
       { label: 'Retiro fiscal en el ERP', value: snapshot.erpRetirement || 'sin consultar', ok: snapshot.erpRetirement === 'activo' },
@@ -203,6 +244,21 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
             )}
 
             {note && <p className="mt-3 whitespace-pre-wrap rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-bold text-sky-900">{note}</p>}
+            {snapshot?.absoluteRecoveryAvailable && (
+               <section className="mt-3 space-y-2 rounded-xl border border-slate-300 bg-white p-3 text-xs">
+                  <button onClick={() => { void readAbsoluteIdentity(); }} disabled={busy !== null} className="rounded-lg bg-slate-700 px-4 py-2 font-bold text-white disabled:opacity-40">Consultar identidad para conciliación de Absolute</button>
+                  {absoluteIdentity && <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1 break-all select-text">
+                     <dt>e-NCF</dt><dd>{absoluteIdentity.ncf}</dd>
+                     <dt>Intento</dt><dd>{absoluteIdentity.checkoutId}</dd>
+                     <dt>Transacción</dt><dd>{absoluteIdentity.transactionId}</dd>
+                     <dt>Operación</dt><dd>{absoluteIdentity.operationId}</dd>
+                     <dt>Autorización fiscal</dt><dd>{absoluteIdentity.authorizationId}</dd>
+                     <dt>Asignación fiscal</dt><dd>{absoluteIdentity.allocationId}</dd>
+                     <dt>Huella del intento</dt><dd>{absoluteIdentity.snapshotHash}</dd>
+                  </dl>}
+                  {absoluteIdentity && <button onClick={() => { void releaseAbsolute(absoluteIdentity); }} disabled={busy !== null} className="rounded-lg bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-40">Liberar el intento de Absolute tras la conciliación</button>}
+               </section>
+            )}
             {releaseOffered && (
                <div className="mt-3 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
                   <p className="text-xs font-bold leading-relaxed text-rose-900">El ERP no puede confirmar ni retirar el intento (servicio deshabilitado). Si verificaste que no hay comprobante, un supervisor puede liberar la caja; queda registrado con su nombre.</p>
