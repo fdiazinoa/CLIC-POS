@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, ShieldCheck, ShieldAlert, Eraser, Loader2, ClipboardCopy } from 'lucide-react';
 import { clicConfirm, clicPrompt, clicAlert } from '../services/dialog/ClicDialogService';
 import type { RoleDefinition, User } from '../types';
+import type { absoluteFiscalRecoveryIdentity } from '../services/fiscal/AbsoluteFiscalRecoveryIdentity';
 
 type Snapshot = Awaited<ReturnType<typeof readSnapshot>>;
 
@@ -35,12 +36,14 @@ const tone = (ok: boolean) => ok ? 'text-emerald-700 bg-emerald-50 border-emeral
  */
 export default function FiscalDiagnostics({ onClose, users = [], roles = [], currentUser = null }: { onClose: () => void; users?: User[]; roles?: RoleDefinition[]; currentUser?: User | null }) {
    const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | null>(null);
+   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | 'absolute-recovery' | null>(null);
    const [note, setNote] = useState('');
    const [releaseOffered, setReleaseOffered] = useState(false);
+   const [absoluteIdentity, setAbsoluteIdentity] = useState<ReturnType<typeof absoluteFiscalRecoveryIdentity>>(null);
 
    const refresh = useCallback(async () => {
       setBusy('refresh');
+      setAbsoluteIdentity(null);
       try { setSnapshot(await readSnapshot()); } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
    }, []);
@@ -135,6 +138,18 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       finally { setBusy(null); }
    };
 
+   const readAbsoluteIdentity = async () => {
+      setBusy('absolute-recovery');
+      setAbsoluteIdentity(null);
+      try {
+         const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+         const identity = await fiscalWorkflowV2Client.readAbsoluteRecoveryIdentity();
+         if (!identity) { setNote('El intento específico de Absolute ya no está disponible en esta caja.'); return; }
+         setAbsoluteIdentity(identity);
+      } catch { setNote('No se pudo verificar la identidad fiscal del intento de Absolute.'); }
+      finally { setBusy(null); }
+   };
+
    const copy = async () => {
       if (!snapshot) return;
       const text = [
@@ -205,6 +220,19 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
             )}
 
             {note && <p className="mt-3 whitespace-pre-wrap rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-bold text-sky-900">{note}</p>}
+            {snapshot?.absoluteRecoveryAvailable && (
+               <section className="mt-3 space-y-2 rounded-xl border border-slate-300 bg-white p-3 text-xs">
+                  <button onClick={() => { void readAbsoluteIdentity(); }} disabled={busy !== null} className="rounded-lg bg-slate-700 px-4 py-2 font-bold text-white disabled:opacity-40">Consultar identidad para conciliación de Absolute</button>
+                  {absoluteIdentity && <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1 break-all select-text">
+                     <dt>e-NCF</dt><dd>{absoluteIdentity.ncf}</dd>
+                     <dt>Intento</dt><dd>{absoluteIdentity.checkoutId}</dd>
+                     <dt>Transacción</dt><dd>{absoluteIdentity.transactionId}</dd>
+                     <dt>Operación</dt><dd>{absoluteIdentity.operationId}</dd>
+                     <dt>Autorización fiscal</dt><dd>{absoluteIdentity.authorizationId}</dd>
+                     <dt>Asignación fiscal</dt><dd>{absoluteIdentity.allocationId}</dd>
+                  </dl>}
+               </section>
+            )}
             {releaseOffered && (
                <div className="mt-3 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
                   <p className="text-xs font-bold leading-relaxed text-rose-900">El ERP no puede confirmar ni retirar el intento (servicio deshabilitado). Si verificaste que no hay comprobante, un supervisor puede liberar la caja; queda registrado con su nombre.</p>

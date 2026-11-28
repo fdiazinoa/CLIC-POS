@@ -21,6 +21,7 @@ import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
 import {readOfflineFiscalLocalAuthority,offlineFiscalSessionState} from './OfflineFiscalLeaseContext';
 import {recordCheckoutTrace} from '../audit/CheckoutTrace';
 import {notifyOfflineFiscalReserveDegraded} from './OfflineFiscalReconciliation';
+import {absoluteFiscalRecoveryIdentity,isAbsoluteFiscalRecoveryScope} from './AbsoluteFiscalRecoveryIdentity';
 import {validateOfflineFiscalLease,validateOfflineFiscalPermit,type OfflineFiscalLease,type TableFiscalSaleContext} from './OfflineFiscalLease';
 import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowScope,FiscalWorkflowStateV2,FiscalWorkflowPreparedRecovery} from './FiscalWorkflowV2Types';
 const canonical=(value:any):any=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,canonical(value[k])])):value;
@@ -69,6 +70,7 @@ export interface FiscalDiagnosticsSnapshot {
  authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;
  attempt:string;payments:string;paymentIntents:string;erpRetirement:string;binding:string;lease:string;lastError:string;
  attemptAuthority:'V2_ALLOCATION'|'V1_OFFLINE_LEASE'|'ERP_PERMIT'|'NO_CONTRACT'|null;
+ absoluteRecoveryAvailable:boolean;
  /** Effective downloaded reserve, not the historical permit count. */
  reserveKind:'V2_ALLOCATION'|'V1_LEASE'|'NONE';reserveAvailable:boolean;reserveReason:string;
  bindingHash:string;recordBindingHash:string;transport:string;
@@ -248,6 +250,14 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   try{await native.releaseAttemptWithoutErp(current,actor,{releasedPayments});return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
   catch(error){return {released:false,note:`No se pudo liberar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
  },
+ async readAbsoluteRecoveryIdentity():Promise<ReturnType<typeof absoluteFiscalRecoveryIdentity>>{
+  const auth=readAuth(),scope=scopeOf(auth.descriptor),native=store();
+  if(!native||!isAbsoluteFiscalRecoveryScope(scope))return null;
+  auth.assertCurrent();
+  const current=await native.currentCheckout(fiscalWorkflowScopeKey(scope));
+  auth.assertCurrent();
+  return absoluteFiscalRecoveryIdentity(scope,current);
+ },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
  async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{
   try{const auth=readAuth(),native=store();if(!native)return null;const current=await native.currentCheckout(fiscalWorkflowScopeKey(scopeOf(auth.descriptor)));
@@ -317,7 +327,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  },
  async diagnostics():Promise<FiscalDiagnosticsSnapshot>{
   const out:FiscalDiagnosticsSnapshot={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',payments:'SIN INTENTO',paymentIntents:'SIN INTENTO',erpRetirement:'sin consultar',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||'',
-   attemptAuthority:null,reserveKind:'NONE',reserveAvailable:false,reserveReason:'',bindingHash:'',recordBindingHash:'',transport:''};
+   attemptAuthority:null,absoluteRecoveryAvailable:false,reserveKind:'NONE',reserveAvailable:false,reserveReason:'',bindingHash:'',recordBindingHash:'',transport:''};
   // A missing/expired session must not hide the local reserve: the screen is read-only evidence.
   try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;const expiry=(auth as any).sessionExpiresAt;out.session=expiry?new Date(expiry).toLocaleString('es-DO'):'sin vencimiento';out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);out.session='sin sesión verificada';}
   try{const transportState=offlineFiscalSessionState();out.transport=transportState.verified?'Sesión local verificada':`Sesión sin verificar (${transportState.detail})`;}catch{out.transport='Sesión sin verificar';}
@@ -335,6 +345,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
      else if(current.permit?.leaseId)out.attemptAuthority='V1_OFFLINE_LEASE';
      else if(current.permit?.permitId)out.attemptAuthority='ERP_PERMIT';
      else out.attemptAuthority='NO_CONTRACT';
+     out.absoluteRecoveryAvailable=out.authStatus==='OK'&&Boolean(absoluteFiscalRecoveryIdentity(local.scope,current));
     }
     // A bound payment intent is why a local release refuses an attempt with a payment. Payments taken
     // by the attempt and provider intents are different sources and are reported separately.
