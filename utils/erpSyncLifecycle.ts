@@ -1,3 +1,4 @@
+import { preserveErpLoyaltyFromLegacyConfig, readErpLoyaltyPolicyVersion, withErpLoyaltyConfigWrite } from './loyaltyConfigAuthority';
 import { receivePosSecurityV2 } from '../services/sync/PosSecurityV2Sync';
 import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
 import { usesLargeMasterSyncV3Authority } from '../services/sync/LargeMasterSyncV3Authority';
@@ -61,6 +62,7 @@ import {
 import {
     AuthLevel,
     BusinessConfig,
+    ErpLoyaltyPolicyVersion,
     DeviceRole,
     DeviceRoleConfig,
     TerminalConfig,
@@ -646,7 +648,8 @@ const mergeConfigPushV2Delta = (current: unknown, delta: unknown): unknown => {
 
 const buildConfigWriteFromSnapshot = async (
     domain: Record<string, unknown>,
-    resolved: Record<string, unknown>
+    resolved: Record<string, unknown>,
+    loyaltyPolicyVersion?: ErpLoyaltyPolicyVersion,
 ): Promise<ConfigPushV2CollectionWrite | null> => {
     const localConfig = await db.get('config' as any);
     if (!localConfig || typeof localConfig !== 'object' || Array.isArray(localConfig)) return null;
@@ -675,6 +678,7 @@ const buildConfigWriteFromSnapshot = async (
         terminalId,
         posDeviceId: resolveLocalDeviceId() || undefined,
         incomingSnapshot: incomingSnapshot as any,
+        erpLoyaltyPolicyVersion: loyaltyPolicyVersion,
     });
     const delta = buildConfigPushV2Delta(baseline.config, applied.config);
     if (delta === CONFIG_PUSH_V2_UNCHANGED) return null;
@@ -683,7 +687,8 @@ const buildConfigWriteFromSnapshot = async (
 
 export const buildConfigPushV2DomainWrites = async (
     scope: string,
-    domainPayload: unknown
+    domainPayload: unknown,
+    loyaltyPolicyVersion?: ErpLoyaltyPolicyVersion,
 ): Promise<ConfigPushV2CollectionWrite[]> => {
     // Keep the public helper backward-compatible with the former local names
     // while storing and comparing only canonical ERP domain versions.
@@ -750,7 +755,7 @@ export const buildConfigPushV2DomainWrites = async (
             addArray(collection, domain[collection], domain[snake], nestedLoyalty[collection], nestedLoyalty[snake]);
         }
         if (Object.keys(nestedLoyalty).length > 0) {
-            const configWrite = await buildConfigWriteFromSnapshot(domain, { loyalty: nestedLoyalty });
+            const configWrite = await buildConfigWriteFromSnapshot(domain, { loyalty: nestedLoyalty }, loyaltyPolicyVersion);
             if (configWrite) writes.set(configWrite.collection, configWrite.value);
         }
     } else if (scope === 'promotions') {
@@ -798,6 +803,11 @@ const assertConfigPushV2ConfigPersisted = async (expectedValue: unknown): Promis
             throw new Error(`CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH:${key}`);
         }
     }
+    if (expected.erpLoyaltyPolicyVersion && (
+        JSON.stringify(expected.erpLoyaltyPolicyVersion) !== JSON.stringify(persisted.erpLoyaltyPolicyVersion)
+        || JSON.stringify(expected.loyalty) !== JSON.stringify(persisted.loyalty)
+    )) throw new Error('CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH:loyalty');
+
     // Verify terminal preferences too: a storage adapter may silently drop fields.
     for (const terminal of expected.terminals as any[] || []) {
         const saved = (persisted.terminals as any[]).find(row => row.id === terminal.id);
@@ -815,8 +825,9 @@ const applyConfigPushV2Domain = async (
     domainPayload: unknown,
     rollbackJournal: ConfigPushV2RollbackJournal,
     assertBinding: () => void,
+    loyaltyPolicyVersion?: ErpLoyaltyPolicyVersion,
 ): Promise<string[]> => {
-    const writes = await buildConfigPushV2DomainWrites(scope, domainPayload);
+    const writes = await buildConfigPushV2DomainWrites(scope, domainPayload, loyaltyPolicyVersion);
     const containsMasterNumberRanges = extractMasterNumberRanges(domainPayload).length > 0;
     if (writes.length === 0 && !containsMasterNumberRanges && !(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) && ['catalog', 'prices'].includes(scope))) {
         throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
@@ -849,11 +860,12 @@ const applyConfigPushV2DomainsAtomically = async (
     domains: Record<string, unknown>,
     assertBinding: () => void,
     authority?: V3ConfigRefreshAuthority,
+    loyaltyPolicyVersion?: ErpLoyaltyPolicyVersion,
 ): Promise<string[]> => {
     if (!dbAdapter.saveDocumentsAtomically) {
         throw new Error('CONFIG_PUSH_V2_ATOMIC_STORAGE_UNAVAILABLE');
     }
-    const expectedConfig = authority ? await db.get('config') as unknown as BusinessConfig : undefined;
+    const expectedConfig = await db.get('config') as unknown as BusinessConfig;
     if (authority) {
         if (dbAdapter.supportsV3ConfigPushAuthority !== true) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
         authority.assertCurrent(expectedConfig!);
@@ -866,12 +878,20 @@ const applyConfigPushV2DomainsAtomically = async (
     });
     const writes = new Map<string, unknown>();
     for (const scope of orderedScopes) {
-        const domainWrites = await buildConfigPushV2DomainWrites(scope, domains[scope]);
+        const domainWrites = await buildConfigPushV2DomainWrites(scope, domains[scope], loyaltyPolicyVersion);
         const hasRanges = extractMasterNumberRanges(domains[scope]).length > 0;
         if (domainWrites.length === 0 && !hasRanges && !(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) && ['catalog', 'prices'].includes(scope))) {
             throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
         }
-        domainWrites.forEach((write) => writes.set(write.collection, write.value));
+        for (const write of domainWrites) {
+            const previous = writes.get(write.collection);
+            if (write.collection === 'config' && previous) {
+                const delta = buildConfigPushV2Delta(expectedConfig, write.value);
+                if (delta !== CONFIG_PUSH_V2_UNCHANGED) writes.set(write.collection, mergeConfigPushV2Delta(previous, delta));
+            } else {
+                writes.set(write.collection, write.value);
+            }
+        }
     }
 
     for (const [collection, originalValue] of writes) {
@@ -1056,6 +1076,21 @@ const processConfigPushV2Event = async (
     });
 
     const state = readConfigPushV2State();
+    const loyaltyScope = {
+        tenantId: boundTenantId,
+        terminalId: binding.terminalUuid || binding.terminalId || terminalId,
+        storeId: binding.storeId,
+    };
+    if (scopes.includes('loyalty')) {
+        const durablePolicy = readErpLoyaltyPolicyVersion(await db.get('config') as unknown as BusinessConfig, loyaltyScope);
+        if (durablePolicy) {
+            state.domainVersions = {
+                ...state.domainVersions,
+                loyalty: Math.max(durablePolicy.version, getConfigPushV2LocalVersion(state, 'loyalty')),
+            };
+        }
+        assertBinding();
+    }
     const attempts = state.inFlight?.eventId === eventId ? Number(state.inFlight.attempts || 0) : 0;
     setConfigPushV2InFlight(eventId, snapshotId, versionHash, scopes, attempts, null);
 
@@ -1299,62 +1334,73 @@ const processConfigPushV2Event = async (
 
             const domains = normalizeConfigPushV2Domains(snapshotPayload.domains);
             const snapshotVersions = normalizeVersionsMap(snapshotPayload.versions);
+            let loyaltyPolicyVersion: ErpLoyaltyPolicyVersion | undefined;
+            if (staleScopes.includes('loyalty')) {
+                const version = Number(versions.loyalty);
+                if (!Number.isSafeInteger(version) || version <= 0
+                    || (snapshotVersions.loyalty !== undefined && snapshotVersions.loyalty !== version)) {
+                    throw new Error('SYNC_SNAPSHOT_LOYALTY_VERSION_MISMATCH');
+                }
+                loyaltyPolicyVersion = { ...loyaltyScope, version };
+            }
             const nextDomainVersions = { ...(state.domainVersions || {}) };
             let touchedCollections: string[] = [];
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
-            try {
-                assertBinding();
-                if (couplesFiscalCatalog) {
-                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding, configAuthority);
-                } else {
-                    for (const scope of staleScopes) {
-                        assertBinding();
-                        touchedCollections.push(...await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal, assertBinding));
+            await withErpLoyaltyConfigWrite(async () => {
+                try {
+                    assertBinding();
+                    if (couplesFiscalCatalog) {
+                        touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding, configAuthority, loyaltyPolicyVersion);
+                    } else {
+                        for (const scope of staleScopes) {
+                            assertBinding();
+                            touchedCollections.push(...await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal, assertBinding, loyaltyPolicyVersion));
+                        }
                     }
-                }
-                for (const scope of staleScopes) {
-                    const touchedForScope = await buildConfigPushV2DomainWrites(scope, domains[scope]);
-                    nextDomainVersions[scope] = Number(snapshotVersions[scope] ?? versions[scope] ?? 0);
-                    configPushV2Log('config_snapshot_domain_applied', {
+                    for (const scope of staleScopes) {
+                        const touchedForScope = await buildConfigPushV2DomainWrites(scope, domains[scope]);
+                        nextDomainVersions[scope] = Number(snapshotVersions[scope] ?? versions[scope] ?? 0);
+                        configPushV2Log('config_snapshot_domain_applied', {
+                            event_id: eventId,
+                            snapshot_id: snapshotId,
+                            version_hash: versionHash,
+                            scopes: [scope],
+                            count: touchedForScope.length,
+                        });
+                    }
+                    if (v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))) {
+                        const { persistLargeMasterSyncV3ConfigPushCatalog } = await import('../services/sync/LargeMasterSyncV3ConfigPush');
+                        if (!configAuthority) throw new Error('SYNC_V3_REFRESH_AUTHORITY_CHANGED');
+                        await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, configAuthority);
+                    }
+                    assertBinding();
+                    // Do not activate a range from an event whose later domain fails.
+                    // The independent monotonic range transaction runs only after all
+                    // ordinary domain writes have been validated successfully.
+                    const masterNumberRanges = staleScopes.flatMap(scope => extractMasterNumberRanges(domains[scope]));
+                    if (masterNumberRanges.length > 0) {
+                        await persistMasterNumberRangesFromSnapshot(
+                            { resolved: { master_number_ranges: masterNumberRanges } }, terminalId,
+                        );
+                    }
+                } catch (error) {
+                    assertBinding();
+                    if (!couplesFiscalCatalog) {
+                        await rollbackConfigPushV2Collections(rollbackJournal);
+                    }
+                    configPushV2Log('config_snapshot_apply_failed', {
                         event_id: eventId,
                         snapshot_id: snapshotId,
                         version_hash: versionHash,
-                        scopes: [scope],
-                        count: touchedForScope.length,
+                        scopes: staleScopes,
+                        code: compactErrorDetail(error),
+                        reason: (error as { bindingReason?: string })?.bindingReason,
+                        rolled_back_collections: couplesFiscalCatalog ? 0 : rollbackJournal.size,
+                        atomic_transaction: couplesFiscalCatalog,
                     });
+                    throw error;
                 }
-                if (v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))) {
-                    const { persistLargeMasterSyncV3ConfigPushCatalog } = await import('../services/sync/LargeMasterSyncV3ConfigPush');
-                    if (!configAuthority) throw new Error('SYNC_V3_REFRESH_AUTHORITY_CHANGED');
-                    await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, configAuthority);
-                }
-                assertBinding();
-                // Do not activate a range from an event whose later domain fails.
-                // The independent monotonic range transaction runs only after all
-                // ordinary domain writes have been validated successfully.
-                const masterNumberRanges = staleScopes.flatMap(scope => extractMasterNumberRanges(domains[scope]));
-                if (masterNumberRanges.length > 0) {
-                    await persistMasterNumberRangesFromSnapshot(
-                        { resolved: { master_number_ranges: masterNumberRanges } }, terminalId,
-                    );
-                }
-            } catch (error) {
-                assertBinding();
-                if (!couplesFiscalCatalog) {
-                    await rollbackConfigPushV2Collections(rollbackJournal);
-                }
-                configPushV2Log('config_snapshot_apply_failed', {
-                    event_id: eventId,
-                    snapshot_id: snapshotId,
-                    version_hash: versionHash,
-                    scopes: staleScopes,
-                    code: compactErrorDetail(error),
-                    reason: (error as { bindingReason?: string })?.bindingReason,
-                    rolled_back_collections: couplesFiscalCatalog ? 0 : rollbackJournal.size,
-                    atomic_transaction: couplesFiscalCatalog,
-                });
-                throw error;
-            }
+            });
 
             assertBinding();
             writeConfigPushV2State({
@@ -2592,8 +2638,17 @@ const applyErpConfigPushToLocalTerminal = async ({
         appliedRole: nextTerminalConfig.deviceRole?.role || null,
     });
 
-    await db.save('config', nextConfig);
-    window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
+    await withErpLoyaltyConfigWrite(async () => {
+        const binding = getStoredErpSyncBinding();
+        const current = await db.get('config') as unknown as BusinessConfig;
+        const retained = preserveErpLoyaltyFromLegacyConfig(current, nextConfig, {
+            tenantId: binding.tenantId,
+            terminalId: binding.terminalUuid || binding.terminalId,
+            storeId: binding.storeId,
+        });
+        await db.save('config', retained);
+        window.dispatchEvent(new CustomEvent('configUpdated', { detail: retained }));
+    });
 
     return true;
 };

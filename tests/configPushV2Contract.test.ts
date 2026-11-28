@@ -591,6 +591,11 @@ test('out-of-order loyalty and mixed terminal ACKs cannot undo a newer OFF rule'
     const savedVersion = () => lifecycle.getConfigPushV2Diagnostics().domainVersions.loyalty;
 
     assert.equal((await loyalty(5, off)).acks[0].status, 'APPLIED');
+    assert.equal(savedConfig().erpLoyaltyPolicyVersion?.version, 5);
+    // Restart after durable OFF was written but before the outbox cursor made it to storage.
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'previous-loyalty', domainVersions: { loyalty: 3 }, inFlight: null,
+    }));
     const oldest = await loyalty(3, on);
     assert.equal(oldest.acks[0].status, 'APPLIED');
     assert.deepEqual(oldest.snapshotUrls, []);
@@ -621,6 +626,62 @@ test('out-of-order loyalty and mixed terminal ACKs cannot undo a newer OFF rule'
     assert.equal((await loyalty(6, on)).acks[0].status, 'APPLIED');
     assert.equal(savedVersion(), 6);
     assert.equal(savedConfig().loyalty?.isEnabled, true);
+    assert.equal(savedConfig().erpLoyaltyPolicyVersion?.version, 6);
+});
+
+test('a delayed resolved refresh and pending bootstrap cannot restore earlier unversioned ON', async () => {
+    const { config, localTerminalId } = resetHarness();
+    const { syncManager } = await import('../services/sync/SyncManager');
+    const snapshot = {
+        terminal_id: terminalId,
+        tenant_id: 'tenant-config-push-contract',
+        resolved: { loyalty: { config: { ...config.loyalty, isEnabled: true } } },
+    };
+    const staleBase = { ...config, loyalty: { ...config.loyalty!, isEnabled: false } };
+    const priorRehydrate = db.rehydrateOperationalDocumentState;
+    db.rehydrateOperationalDocumentState = async () => undefined as never;
+    try {
+        const bootstrap = await syncManager.refreshTerminalResolvedConfig(snapshot, {
+            baseConfig: staleBase, supplementalMode: 'skip',
+        });
+        assert.equal(bootstrap?.loyalty?.isEnabled, true);
+        assert.equal(bootstrap?.erpLoyaltyPolicyVersion, undefined);
+
+        let requestStarted!: () => void;
+        let returnOldSnapshot!: (response: Response) => void;
+        const started = new Promise<void>(resolve => { requestStarted = resolve; });
+        const delayedResponse = new Promise<Response>(resolve => { returnOldSnapshot = resolve; });
+        globalThis.fetch = async (request) => {
+            assert.match(String(request), /\/terminals\/[^/]+\/config/);
+            requestStarted();
+            return delayedResponse;
+        };
+        const refresh = syncManager.refreshTerminalResolvedConfig(undefined, {
+            baseConfig: config, supplementalMode: 'skip',
+        });
+        await Promise.race([started, refresh.then(() => { throw new Error('Expected the ERP config request'); })]);
+        try {
+            assert.equal((await runEvent({
+                id: 'durable-disable-loyalty', scopes: ['loyalty'], versions: { loyalty: 5 },
+                domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+            })).acks[0].status, 'APPLIED');
+        } finally {
+            returnOldSnapshot(Response.json({ terminal_config: snapshot }));
+        }
+        const refreshed = await refresh;
+        assert.equal(refreshed?.loyalty?.isEnabled, false);
+        assert.equal(refreshed?.erpLoyaltyPolicyVersion?.version, 5);
+
+        localStorage.setItem('clic_pos_terminal_config_pending_snapshot', JSON.stringify({
+            erpTerminalId: terminalId, localTerminalId, snapshot,
+        }));
+        globalThis.fetch = async () => { throw new Error('ERP unavailable'); };
+        const pending = await syncManager.refreshTerminalResolvedConfig(undefined, { supplementalMode: 'skip' });
+        assert.equal(pending?.loyalty?.isEnabled, false);
+        assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.version, 5);
+    } finally {
+        db.rehydrateOperationalDocumentState = priorRehydrate;
+    }
 });
 
 test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', async () => {
