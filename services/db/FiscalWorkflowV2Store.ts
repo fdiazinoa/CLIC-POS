@@ -40,7 +40,7 @@ const fail=():never=>{throw Error('FISCAL_WORKFLOW_NATIVE_CONFLICT');};
 const one=(r:{values?:any[]})=>r.values?.[0];
 const parseJson=(value:unknown):any=>{try{return value===undefined||value===null?null:JSON.parse(String(value));}catch{return null;}};
 export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
- constructor(private readonly connection:()=>Connection,private readonly lock:<T>(operation:()=>Promise<T>)=>Promise<T>){}
+ constructor(private readonly connection:()=>Connection,private readonly lock:<T>(operation:()=>Promise<T>)=>Promise<T>,private readonly absoluteRecoveryTestPublicKey?:JsonWebKey){}
  private async transaction<T>(work:(sql:Connection)=>Promise<T>, traceAllocation = false):Promise<T>{
   return this.lock(() => {
    const execute = async () => {
@@ -104,8 +104,8 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
  async readAbsoluteRecoveryCandidate(scope:FiscalWorkflowScope):Promise<AbsoluteFiscalRecoveryCandidate|null>{
   return absoluteFiscalRecoveryCandidate(await this.currentCheckout(fiscalWorkflowScopeKey(scope)),scope);
  }
- async releaseAbsoluteRecovery(scope:FiscalWorkflowScope,expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,remoteReference:string,actor:string):Promise<void>{
-  return this.transaction(sql=>releaseAbsoluteFiscalAttempt(sql,scope,expected,observedNcf,remoteReference,actor));
+ async releaseAbsoluteRecovery(scope:FiscalWorkflowScope,expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,confirmation:string,actor:string){
+  return this.transaction(sql=>releaseAbsoluteFiscalAttempt(sql,scope,expected,observedNcf,confirmation,actor,this.absoluteRecoveryTestPublicKey));
  }
  async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2,options:{allowOfflineEffect?:boolean}={}):Promise<void>{await this.transaction(async sql=>{
   const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}

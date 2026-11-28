@@ -14,6 +14,7 @@ import {hasFiscalWorkflowCapability,observeFiscalWorkflowCapability} from './Fis
 import type {Transaction} from '../../types';
 import {dbAdapter} from '../db';
 import {createUuid} from '../../utils/uuid';
+import {forgetStableCheckoutAttemptIdIfMatches} from '../../utils/checkoutAttemptIdentity';
 import {financialIdentity} from '../db/LargeMasterSyncV3FinancialRetention';
 import {captureFiscalStatusBoundContext} from './FiscalBoundContext';
 import {fiscalStatusSourceChecksum} from './FiscalStatusProof';
@@ -259,11 +260,12 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   auth.assertCurrent();
   return candidate;
  },
- async releaseAbsoluteRecovery(expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,remoteReference:string,actor:string):Promise<void>{
+ async releaseAbsoluteRecovery(expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,confirmation:string,actor:string):Promise<void>{
   const auth=readAuth(),scope=scopeOf(auth.descriptor),native=store();
   auth.assertCurrent();
   if(!native?.releaseAbsoluteRecovery||!isAbsoluteFiscalRecoveryScope(scope))fail('ABSOLUTE_FISCAL_RECOVERY_UNAVAILABLE');
-  await native.releaseAbsoluteRecovery(scope,expected,observedNcf,remoteReference,actor);
+  const retired=await native.releaseAbsoluteRecovery(scope,expected,observedNcf,confirmation,actor);
+  forgetStableCheckoutAttemptIdIfMatches(retired.cartKey,retired.paymentNamespace);
  },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
  async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{

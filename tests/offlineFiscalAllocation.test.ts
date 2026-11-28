@@ -24,6 +24,9 @@ import {createFiscalWorkflowV2Client} from '../services/fiscal/FiscalWorkflowV2C
 import {assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope} from '../services/fiscal/FiscalWorkflowCheckoutReplay';
 import {ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA} from '../services/db/AbsoluteFiscalRecoveryStore';
 import {TRACKING_ALLOCATION_SCHEMA} from '../services/db/TrackingAllocationStore';
+import {absoluteFiscalConfirmationBytes} from '../services/fiscal/AbsoluteFiscalRecoveryConfirmation';
+import {cartDigest} from '../services/fiscal/FiscalWorkflowRetirement';
+import {stableCheckoutAttemptId} from '../utils/checkoutAttemptIdentity';
 const uuid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:uuid(1),deviceId:'device'};
 const credentialsFor=(scope: {tenantId:string;companyId:string;storeId:string;terminalId:string;deviceId:string})=>({...scope,erpTenantId:scope.tenantId,erpTerminalId:scope.terminalId,deviceToken:'synthetic-device',syncToken:'expired',syncTokenExpiresAt:'2020-01-01',authStatus:'BOUND'});
@@ -345,7 +348,6 @@ test('diagnostics explain why a V2 allocation with a possible payment cannot be 
 const absoluteScope={tenantId:'b2e01916-309a-414f-b9f0-636352d25318',companyId:'39ac760d-bd18-4611-8251-84eaec00dea1',storeId:'7f3a2d1a-4d10-4f9c-afed-9b4d55f417c2',terminalId:'31d2162e-1767-4f74-8e72-7c73a3341e96',deviceId:'device'};
 const absoluteCheckoutId='496e3827-0000-4000-8000-000000000001';
 const absoluteMarker=`${uuid(98)}:payment:0`;
-const remoteReference='b'.repeat(64);
 
 async function absoluteFixture(t: TestContext) {
  const f=await fixture({fixtureScope:absoluteScope,issuer:'131397662',environment:2});
@@ -360,18 +362,30 @@ async function absoluteFixture(t: TestContext) {
  assert.equal(candidate?.checkoutId,absoluteCheckoutId);
  assert.equal(checkout.paymentIds[0],absoluteMarker);
  assert.notEqual(checkout.operationId,uuid(98));
- return { ...f, checkout, candidate:candidate!, release:()=>f.store.releaseAbsoluteRecovery(absoluteScope,candidate!,candidate!.ncf,remoteReference,'Fixture supervisor') };
+ const keys=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+ const fixtureStore=new NativeFiscalWorkflowV2Store(()=>f.bridge,action=>action(),await crypto.subtle.exportKey('jwk',keys.publicKey));
+ const sign=async (checkedAtMs:number, target=candidate!)=>{
+  const signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys.privateKey,absoluteFiscalConfirmationBytes(target,checkedAtMs));
+  return `${checkedAtMs}.${Buffer.from(signature).toString('hex')}`;
+ };
+ const confirmation=await sign(Date.now());
+ const verifiedClient=createFiscalWorkflowV2Client({store:()=>fixtureStore,readAuth:()=>({descriptor:absoluteScope,assertCurrent(){}})} as any);
+ return { ...f, checkout, candidate:candidate!, sign, fixtureStore, confirmation, release:()=>verifiedClient.releaseAbsoluteRecovery(candidate!,candidate!.ncf,confirmation,'Fixture supervisor') };
 }
 
 test('audited Absolute release leaves the exact identity fenced and E32 available, without writing a sale or advancing numbering',async t=>{
  const f=await absoluteFixture(t);
  const cursor=f.sql.prepare("SELECT data FROM documents WHERE collection_name='localFiscalBuffer'");
  const original=cursor.get();
+ assert.equal(stableCheckoutAttemptId(f.checkout.cartIdentity,()=>uuid(98)),uuid(98));
+ assert.equal(stableCheckoutAttemptId('other-cart',()=>uuid(98)),uuid(98));
  assert.throws(()=>f.sql.prepare("UPDATE pos_fiscal_pending_numbers_v2 SET state='ABANDONED' WHERE checkout_id=?").run(absoluteCheckoutId), /OWNER_IMMUTABLE/);
  await f.release();
+ assert.equal(stableCheckoutAttemptId(f.checkout.cartIdentity,()=>uuid(109)),uuid(109));
+ assert.equal(stableCheckoutAttemptId('other-cart',()=>uuid(109)),uuid(98));
  const proof=f.sql.prepare('SELECT * FROM pos_absolute_fiscal_recovery_v2').get()!;
  assert.equal(proof.checkout_id,absoluteCheckoutId);
- assert.equal(proof.remote_reference,remoteReference);
+ assert.equal(proof.remote_reference,await cartDigest(f.confirmation));
  assert.equal(proof.authority_hash,f.grant.authorityHash);
  assert.equal(proof.checkout_json,JSON.stringify(f.checkout));
  assert.equal((await f.store.currentCheckout(f.checkout.scopeKey)),null);
@@ -397,8 +411,15 @@ test('audited Absolute release leaves the exact identity fenced and E32 availabl
 
 test('audited Absolute release refuses a stale snapshot, incorrect e-NCF or an existing unbound provider intent',async t=>{
  const f=await absoluteFixture(t);
- await assert.rejects(f.store.releaseAbsoluteRecovery(absoluteScope,f.candidate,'E320000000002',remoteReference,'Fixture supervisor'),/CONFIRMATION_MISMATCH/);
- await assert.rejects(f.store.releaseAbsoluteRecovery(absoluteScope,{...f.candidate,snapshotHash:'c'.repeat(64)},f.candidate.ncf,remoteReference,'Fixture supervisor'),/CHECKOUT_MISMATCH/);
+ const tryRelease=async (confirmation:string)=>f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,f.candidate,f.candidate.ncf,confirmation,'Fixture supervisor');
+ await assert.rejects(f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,f.candidate,'E320000000002',f.confirmation,'Fixture supervisor'),/CONFIRMATION_MISMATCH/);
+ await assert.rejects(f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,{...f.candidate,snapshotHash:'c'.repeat(64)},f.candidate.ncf,f.confirmation,'Fixture supervisor'),/CHECKOUT_MISMATCH/);
+ await assert.rejects(tryRelease('b'.repeat(64)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(`${Date.now()}.${'0'.repeat(128)}`),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now(),{...f.candidate,transactionId:uuid(100)})),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now()-660_000)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now()+120_000)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(f.store.releaseAbsoluteRecovery(absoluteScope,f.candidate,f.candidate.ncf,f.confirmation,'Fixture supervisor'),/REMOTE_CONFIRMATION_INVALID/);
  f.sql.prepare(`INSERT INTO payment_intents_v2(intent_id,idempotency_key,payment_id,provider,amount,currency_code,status,created_at,updated_at)
   VALUES('held','held',?,'AZUL',100,'DOP','UNKNOWN','now','now')`).run(absoluteMarker);
  await assert.rejects(f.release,/PAYMENT_INTENT_EXISTS/);

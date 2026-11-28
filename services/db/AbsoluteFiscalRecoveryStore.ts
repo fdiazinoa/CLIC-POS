@@ -1,4 +1,5 @@
 import { absoluteFiscalRecoveryIdentity } from '../fiscal/AbsoluteFiscalRecoveryIdentity';
+import { verifyAbsoluteFiscalConfirmation } from '../fiscal/AbsoluteFiscalRecoveryConfirmation';
 import { cartDigest } from '../fiscal/FiscalWorkflowRetirement';
 import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2, type FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
 import { allocationHash, type OfflineFiscalAllocation } from '../fiscal/OfflineFiscalAllocation';
@@ -49,14 +50,16 @@ export async function absoluteFiscalRecoveryCandidate(checkout: FiscalWorkflowCh
 }
 
 /** Runs on the already-owned native transaction. An absent or stale grant still blocks any new payment. */
-export async function releaseAbsoluteFiscalAttempt(sql: SQL, scope: FiscalWorkflowScope, expected: AbsoluteFiscalRecoveryCandidate, observedNcf: string, remoteReference: string, actor: string): Promise<void> {
-    if (actor.length < 2 || actor.length > 120 || observedNcf !== expected.ncf || !/^[0-9a-f]{64}$/.test(remoteReference)) fail('CONFIRMATION_MISMATCH');
+export async function releaseAbsoluteFiscalAttempt(sql: SQL, scope: FiscalWorkflowScope, expected: AbsoluteFiscalRecoveryCandidate, observedNcf: string, confirmation: string, actor: string, testPublicKey?: JsonWebKey): Promise<{ cartKey: string; paymentNamespace: string }> {
+    if (actor.length < 2 || actor.length > 120 || observedNcf !== expected.ncf) fail('CONFIRMATION_MISMATCH');
     const scopeKey = fiscalWorkflowScopeKey(scope);
     const row = await one(sql, `SELECT c.* FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c
         ON p.checkout_id=c.checkout_id AND p.scope_key=c.scope_key WHERE p.scope_key=? AND p.checkout_id=?`, [scopeKey, expected.checkoutId]);
     const checkout: FiscalWorkflowCheckoutV2 | null = row ? JSON.parse(row.checkout_json) : null;
     const candidate = await absoluteFiscalRecoveryCandidate(checkout, scope);
     if (!checkout || !candidate || Object.keys(candidate).some(key => candidate[key as keyof AbsoluteFiscalRecoveryCandidate] !== expected[key as keyof AbsoluteFiscalRecoveryCandidate])) fail('CHECKOUT_MISMATCH');
+    if (!await verifyAbsoluteFiscalConfirmation(candidate, confirmation, testPublicKey)) fail('REMOTE_CONFIRMATION_INVALID');
+    const remoteReference = await cartDigest(confirmation);
     if (row.phase !== checkout.phase || row.transaction_id !== checkout.transactionId || row.permit_id !== null || row.cart_identity !== checkout.cartIdentity) fail('CHECKOUT_MISMATCH');
     const allocation = checkout.allocation!;
     const [marker] = checkout.paymentIds;
@@ -104,4 +107,5 @@ export async function releaseAbsoluteFiscalAttempt(sql: SQL, scope: FiscalWorkfl
     if (Number((await one(sql, 'SELECT changes() AS n'))?.n) !== 1) fail('PENDING_NUMBER_NOT_RELEASED');
     await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?', [scopeKey, checkout.checkoutId], false);
     if (Number((await one(sql, 'SELECT changes() AS n'))?.n) !== 1) fail('CURRENT_CHECKOUT_NOT_RELEASED');
+    return { cartKey: checkout.cartIdentity, paymentNamespace: marker.slice(0, -':payment:0'.length) };
 }

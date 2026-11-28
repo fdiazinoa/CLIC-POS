@@ -158,17 +158,17 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          const observed = await clicPrompt('Verifica que la venta quedó sin cobrar y que la transacción y su e-NCF no figuran en el ERP ni en MSeller. Escribe el e-NCF exacto de la verificación para confirmar.', { required: true });
          if (observed === null) return;
          if (observed.trim() !== candidate.ncf) { setNote('El e-NCF ingresado no coincide con el intento verificado.'); return; }
-         const reference = await clicPrompt('Introduce la referencia SHA-256 de la verificación en el ERP y MSeller.', { required: true });
-         if (reference === null) return;
-         if (!/^[0-9a-f]{64}$/.test(reference.trim())) { setNote('La referencia de verificación debe contener 64 caracteres hexadecimales.'); return; }
+         const confirmation = await clicPrompt('Introduce la confirmación firmada de la consulta al ERP y a MSeller.', { required: true });
+         if (confirmation === null) return;
+         if (!/^\d{13}\.[a-f0-9]{128}$/.test(confirmation.trim())) { setNote('El formato de la confirmación firmada no es válido.'); return; }
          const operator = await requestSupervisor(true);
          if (!operator) return;
          const confirmed = await clicConfirm('¿Liberar el intento verificado de Absolute? Se conservarán el intento y la evidencia de la autorización.');
          if (!confirmed) return;
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-         await fiscalWorkflowV2Client.releaseAbsoluteRecovery(candidate, observed.trim(), reference.trim(), operator.actorId);
+         await fiscalWorkflowV2Client.releaseAbsoluteRecovery(candidate, observed.trim(), confirmation.trim(), operator.actorId);
          setAbsoluteIdentity(null);
-         setNote('Intento de Absolute liberado. Comprueba la disponibilidad E32 antes de abrir otra venta.');
+         setNote('Intento de Absolute liberado. Reinicia el POS y comprueba la disponibilidad E32 antes de abrir otra venta.');
          setSnapshot(await readSnapshot());
       } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
@@ -254,6 +254,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
                      <dt>Operación</dt><dd>{absoluteIdentity.operationId}</dd>
                      <dt>Autorización fiscal</dt><dd>{absoluteIdentity.authorizationId}</dd>
                      <dt>Asignación fiscal</dt><dd>{absoluteIdentity.allocationId}</dd>
+                     <dt>Huella del intento</dt><dd>{absoluteIdentity.snapshotHash}</dd>
                   </dl>}
                   {absoluteIdentity && <button onClick={() => { void releaseAbsolute(absoluteIdentity); }} disabled={busy !== null} className="rounded-lg bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-40">Liberar el intento de Absolute tras la conciliación</button>}
                </section>
