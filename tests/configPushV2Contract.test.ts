@@ -688,6 +688,46 @@ test('the same terminal needs durable loyalty evidence for its new store', async
     assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
 });
 
+test('checkout waits for the current ERP store rule after changing branches', async () => {
+    const { config } = resetHarness();
+    const { preserveErpLoyaltyFromLegacyConfig, setErpLoyaltyBindingStoreId } = await import('../utils/loyaltyConfigAuthority');
+    const cart = [{ price: 100, quantity: 1 }] as Parameters<typeof calculatePointsEarned>[0];
+    const saved = () => collections.get('config') as typeof config;
+    const send = (storeId: string, version: number) => runEvent({
+        id: `points-${storeId}`, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { store_id: storeId, loyalty: { config: config.loyalty } } },
+    });
+
+    setErpLoyaltyBindingStoreId(localStorage, 'store-a');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+    assert.equal((await send('store-a', 5)).acks[0]?.status, 'APPLIED');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+
+    setErpLoyaltyBindingStoreId(localStorage, 'store-b');
+    assert.equal(calculatePointsEarned(cart, saved()), 0);
+    assert.ok(dispatchedEvents.some(event => event.type === 'erpLoyaltyBindingStoreChanged'));
+    const refreshed = preserveErpLoyaltyFromLegacyConfig(saved(), config, {
+        tenantId: 'tenant-config-push-contract', terminalId, storeId: 'store-b',
+    });
+    assert.equal(calculatePointsEarned(cart, refreshed), 0);
+    assert.equal(refreshed.erpLoyaltyPolicyVersion?.storeId, 'store-a');
+    collections.set('config', refreshed);
+
+    assert.equal((await send('store-b', 2)).acks[0]?.status, 'APPLIED');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+});
+
+test('a stamped loyalty snapshot cannot acknowledge a missing program policy', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const { acks } = await runEvent({
+        id: 'stamped-no-loyalty-policy', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { store_id: 'store-a', loyalty: { config: null, campaigns: [], coupons: [] } } },
+    });
+    assert.notEqual(acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion, undefined);
+});
+
 test('a campaign-only snapshot does not prove a newer program policy was applied', async () => {
     const { config } = resetHarness();
     localStorage.setItem('clic_erp_sync_store_id', 'store-a');

@@ -1,4 +1,5 @@
 import { TERMINAL_SESSION_RENEWED_EVENT } from './OperationalTerminalConfig';
+import { setErpLoyaltyBindingStoreId } from '../../utils/loyaltyConfigAuthority';
 import {isTerminalAuthorizationSuperseded, TERMINAL_AUTHORIZATION_BLOCK_STORAGE_KEY} from '../../utils/terminalAuthorizationGuard';
 import { Preferences } from '@capacitor/preferences';
 import type { BusinessConfig } from '../../types';
@@ -202,7 +203,7 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
             storage.setItem('clic_erp_sync_company_id', credentials.companyId);
         }
         if (credentials.storeId) {
-            storage.setItem('clic_erp_sync_store_id', credentials.storeId);
+            setErpLoyaltyBindingStoreId(storage, credentials.storeId);
         }
         if (credentials.deviceToken) {
             storage.setItem('CLIC_POS_DEVICE_TOKEN', credentials.deviceToken);

@@ -1,4 +1,4 @@
-import { preserveErpLoyaltyFromLegacyConfig, readErpLoyaltyPolicyVersion, withErpLoyaltyConfigWrite } from './loyaltyConfigAuthority';
+import { preserveErpLoyaltyFromLegacyConfig, readErpLoyaltyPolicyVersion, setErpLoyaltyBindingStoreId, withErpLoyaltyConfigWrite } from './loyaltyConfigAuthority';
 import { receivePosSecurityV2 } from '../services/sync/PosSecurityV2Sync';
 import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
 import { usesLargeMasterSyncV3Authority } from '../services/sync/LargeMasterSyncV3Authority';
@@ -1354,6 +1354,7 @@ const processConfigPushV2Event = async (
                     scopesToApply = staleScopes.filter(scope => scope !== 'loyalty');
                 } else {
                     const { config: rawPolicy, ...campaigns } = asObject(loyaltyDomain.loyalty);
+                    if (domainStore && rawPolicy == null) throw new Error('SYNC_SNAPSHOT_LOYALTY_POLICY_INVALID');
                     if (rawPolicy != null) {
                         if (expectedStore && !domainStore) {
                             if (!durableLoyaltyVersion) throw new Error('SYNC_SNAPSHOT_LOYALTY_STORE_REQUIRED');
@@ -1811,7 +1812,7 @@ const persistBinding = (
     }
 
     if (terminal.store_id) {
-        localStorage.setItem(SYNC_BINDING_STORE_KEY, terminal.store_id);
+        setErpLoyaltyBindingStoreId(localStorage, terminal.store_id);
     }
 
     if (terminal.last_seen) {
@@ -1880,7 +1881,7 @@ export const persistStoredErpSyncBinding = (input: {
     }
 
     if (storeId) {
-        localStorage.setItem(SYNC_BINDING_STORE_KEY, storeId);
+        setErpLoyaltyBindingStoreId(localStorage, storeId);
     }
 
     if (lastSeen) {
