@@ -1982,6 +1982,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 [current.syncId, current.syncVersion, binding, syncId, syncVersion, inventoryVersion, cursor]);
               if (!receipt.values?.length) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
             }
+            const verifiedReturnHistory = verifiedFiscalReturnSource && mutation.requireAbsent &&
+                mutation.collectionName === 'transactionHistory' && document.id === verifiedFiscalReturnSource.document.id &&
+                JSON.stringify(mutation.v3ExpectedRetainedDocument) === JSON.stringify(verifiedFiscalReturnSource.v3ExpectedRetainedDocument) &&
+                JSON.stringify(document) === JSON.stringify(verifiedFiscalReturnSource.document);
+            const verifiedReturn = mutation === verifiedFiscalReturnSource || verifiedReturnHistory;
             for (const line of document.items || []) {
               // A sealed E34 proves its replenishment inside this write transaction.
               // Coverage of a live balance is still required for other checkout writes.
@@ -2028,8 +2033,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const sources = source.lines.get(JSON.stringify([sourceLineId,line.id])) || [];
                 if (formatSourceLine && (source.document.articleFormatEventId !== document.articleFormatWire?.source_event_id
                   || JSON.stringify(sources[0]?.articleFormat) !== JSON.stringify(line.articleFormat))) throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
-                if (sources.length !== 1 || !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
-                  document.documentType === 'REFUND')) {
+                if (sources.length !== 1 || (!verifiedReturn && !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
+                  document.documentType === 'REFUND'))) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
                 if (!['transactions','transactionHistory'].includes(context.collection)) {

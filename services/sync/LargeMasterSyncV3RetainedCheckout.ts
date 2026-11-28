@@ -1,4 +1,5 @@
 import { sameV3RetainedLine } from './LargeMasterSyncV3StockAuthority';
+import type { ReturnPreparation } from '../fiscal/FiscalReturnV1';
 import { assertV3ReservationSource, reservationClaimId } from './LargeMasterSyncV3ReservationAuthority';
 import type { CartItem, ParkedTicket, Transaction, Reservation } from '../../types';
 import { db } from '../../utils/db';
@@ -10,7 +11,7 @@ export const isV3RetainedTicketClosed = async (id:string): Promise<boolean> => {
 };
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
-export type V3RetainedReference = { ticketId?: string; claimId?: string; tableId?: string; originalTransactionId?: string; reservationId?: string; reservationClaimId?: string };
+export type V3RetainedReference = { ticketId?: string; claimId?: string; tableId?: string; originalTransactionId?: string; reservationId?: string; reservationClaimId?: string; sealedReturnPreparation?: ReturnPreparation };
 export type V3RetainedContext = { collection: 'parkedTickets' | 'transactions' | 'transactionHistory' | 'v3RestoredTicketSources' | 'reservations'; id: string;
   expected: string; items: CartItem[]; reservation?: Reservation };
 const verified = new WeakSet<object>();

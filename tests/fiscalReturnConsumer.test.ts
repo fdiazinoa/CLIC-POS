@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { returnFixture } from './fiscalReturnConsumerFixture';
 import { fiscalWorkflowScopeKey } from '../services/fiscal/FiscalWorkflowV2Types';
-import { returnJSON } from '../services/fiscal/FiscalReturnV1';
+import { returnDigest, returnJSON } from '../services/fiscal/FiscalReturnV1';
 test('native RETURN commits original snapshot, enriched payments and stable events together', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
@@ -22,8 +22,8 @@ test('native RETURN commits original snapshot, enriched payments and stable even
     assert.equal(f.documents('inventoryLedger')[0].qtyIn, 1);
     assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2').get() as any).state, 'CONSUMED');
 });
-test('sealed E34 restocks an older catalog without opening sparse inventory for other writes', async (t) => {
-    const f = await returnFixture();
+test('sealed E34 replays a promoted line with its fiscal discount on an older catalog', async (t) => {
+    const f = await returnFixture(undefined, true, undefined, undefined, false, { sourceLineDiscount: 22.50 });
     t.after(() => f.cleanup());
     const original = f.original;
     const originalLine = original.items[0];
@@ -67,6 +67,10 @@ test('sealed E34 restocks an older catalog without opening sparse inventory for 
 
     const tx = await f.run();
     assert.equal(tx.id, attempt.checkout.transactionId);
+    assert.equal(tx.ncf, attempt.checkout.allocation.ncf);
+    assert.equal(tx.items[0].discountAmount, 0);
+    assert.equal(tx.total, original.total);
+    assert.equal(f.documents('transactions').find(row => row.id === original.id).items[0].discountAmount, 22.50);
     assert.equal(readAttempt().phase, 'COMMITTED');
     assert.equal(readAttempt().localCommittedAt, attempt.localCommittedAt);
     assert.equal((await f.run()).id, tx.id);
@@ -79,6 +83,23 @@ test('sealed E34 restocks an older catalog without opening sparse inventory for 
     assert.deepEqual(f.db.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all().map((row: any) => row.event_type),
         ['SALES_CREDIT_NOTE_POSTED', 'PAYMENT_POSTED']);
     assert.equal((f.db.prepare('SELECT count(*) n FROM master_v3_inventory_balances').get() as any).n, 0);
+});
+test('a sealed photo that differs from the durable original fails before the fiscal effect fence', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    // Supply a valid wire digest for the mismatched original so the retained-line check must reject it.
+    f.setProofTransform(async (proof) => {
+        proof.returnSnapshot.lines[0].originalItem = { ...f.original.items[0], discountAmount: 22.50 };
+        proof.returnSnapshotDigest = await returnDigest(proof.returnSnapshot);
+        proof.returnSnapshotDigestInput = returnJSON({ schemaVersion: 1, source: 'ERP_POS_FISCAL_RETURN_V1', value: proof.returnSnapshot });
+        return proof;
+    });
+    await assert.rejects(f.run(), /SYNC_V3_RETAINED_LINE_CHANGED/);
+    const checkout = await f.adapter.fiscalWorkflowStore.currentCheckout(fiscalWorkflowScopeKey(f.scope));
+    assert.equal(checkout?.phase, 'PREPARED');
+    assert.deepEqual(checkout?.paymentIds, []);
+    assert.equal(f.documents('transactions').length, 1);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
 });
 test('an acknowledged V1 sale does not divert the next E34 to the legacy permit path', async (t) => {
     const f = await returnFixture();
