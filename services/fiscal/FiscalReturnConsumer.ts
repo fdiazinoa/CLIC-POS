@@ -8,6 +8,7 @@ import { captureFiscalStatusBoundContext } from './FiscalBoundContext';
 import { assertReturnAdmission, assertReturnSettlementCapability, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnFiscalTime, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
+import { assertSealedReturnOriginalLines } from './RetainedReturnLine';
 
 class UncertainReturnPreparationResponse extends Error {
     constructor(cause?: unknown) {
@@ -264,16 +265,19 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 returnNeed(draft.fiscalEnvironment === a.preparation!.environment, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
                 const fiscalTime = returnFiscalTime(a.preparation!, ports.now?.() ?? draft.fiscalTimeMs);
                 assertReturnAdmission(c, scope, a.preparation, fiscalTime);
+                const freshOriginal = await (ports.readOriginal?.(original) || Promise.resolve(original));
+                const localCommittedAt = a.localCommittedAt || new Date(fiscalTime).toISOString();
+                const source = a.source || buildReturnSource(a, freshOriginal, seriesId, user);
+                assertSealedReturnOriginalLines(freshOriginal, source, a.preparation!);
+                auth.assertCurrent();
                 const checkedAt = new Date(Date.now()).toISOString();
                 if (!a.localCommittedAt) {
-                    const localCommittedAt = new Date(fiscalTime).toISOString();
-                    a = await store!.save(a, { ...a, localCommittedAt, source: buildReturnSource(a, original, seriesId, user), phase: 'SEALED', admission: { capability: c, checkedAt } });
+                    a = await store!.save(a, { ...a, localCommittedAt, source, phase: 'SEALED', admission: { capability: c, checkedAt } });
                 }
                 else
                     a = await store!.save(a, { ...a, admission: { capability: c, checkedAt } });
                 await store!.fence(a.id);
-                const source = await ports.commit(a.source!, a);
-                return source;
+                return ports.commit(a.source!, a);
             })();
             inflight.set(a.id, work);
             try {

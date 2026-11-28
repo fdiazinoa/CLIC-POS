@@ -1,4 +1,5 @@
 import { CartItem, BusinessConfig, Product, PaymentMethod } from '../types';
+import { getEffectiveLoyaltyConfig } from './loyaltyConfigAuthority';
 
 const LOYALTY_REDEEM_MARKERS = new Set([
     'LOYALTY',
@@ -30,9 +31,10 @@ export const isLoyaltyRedeemMethod = (
  * @returns The total integer points earned.
  */
 export const calculatePointsEarned = (cart: CartItem[], config: BusinessConfig): number => {
-    if (!config.loyalty?.isEnabled) return 0;
+    const loyalty = getEffectiveLoyaltyConfig(config);
+    if (!loyalty?.isEnabled) return 0;
 
-    const { earnRate, excludedCategories } = config.loyalty;
+    const { earnRate, excludedCategories } = loyalty;
 
     let qualifyingTotal = 0;
 
@@ -64,9 +66,10 @@ export const calculatePointsEarned = (cart: CartItem[], config: BusinessConfig):
  * @returns The monetary value in the base currency.
  */
 export const calculateRedemptionValue = (points: number, config: BusinessConfig): number => {
-    if (!config.loyalty?.isEnabled) return 0;
+    const loyalty = getEffectiveLoyaltyConfig(config);
+    if (!loyalty?.isEnabled) return 0;
 
-    const { redeemRate } = config.loyalty;
+    const { redeemRate } = loyalty;
 
     // Value = Points * Rate
     // Example: 100 Points * 0.10 ($/Point) = $10.00
@@ -77,9 +80,10 @@ export const calculateRedemptionValue = (points: number, config: BusinessConfig)
  * Checks if a product is eligible for loyalty points.
  */
 export const isProductEligibleForLoyalty = (product: Product, config: BusinessConfig): boolean => {
-    if (!config.loyalty?.isEnabled) return false;
+    const loyalty = getEffectiveLoyaltyConfig(config);
+    if (!loyalty?.isEnabled) return false;
     if (product.operationalFlags?.excludeFromLoyalty) return false;
-    if (config.loyalty.excludedCategories?.includes(product.category)) return false;
+    if (loyalty.excludedCategories?.includes(product.category)) return false;
     return true;
 };
 

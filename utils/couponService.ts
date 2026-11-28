@@ -1,5 +1,6 @@
 import { BusinessConfig, Campaign, Coupon } from '../types';
 import { createUuid } from './uuid';
+import { updateCurrentBusinessConfig } from './loyaltyConfigAuthority';
 
 export interface RedemptionResult {
     success: boolean;
@@ -12,6 +13,28 @@ export interface RedemptionResult {
     error?: string;
     updatedConfig?: BusinessConfig;
 }
+
+export const persistKioskCouponTicketReference = (
+    database: Parameters<typeof updateCurrentBusinessConfig>[0],
+    fallback: BusinessConfig,
+    couponId: string,
+    terminalId: string,
+    ticketRef: string,
+    notify: (config: BusinessConfig) => void,
+): Promise<BusinessConfig | null> => updateCurrentBusinessConfig(database, fallback, current => {
+    if (!current.coupons?.some(coupon => coupon.id === couponId)) return current;
+
+    return {
+        ...current,
+        coupons: current.coupons.map(coupon => coupon.id === couponId ? {
+            ...coupon,
+            status: 'REDEEMED',
+            ticketRef,
+            terminalId,
+            redeemedAt: coupon.redeemedAt || new Date().toISOString(),
+        } : coupon),
+    };
+}, notify);
 
 export const couponService = {
     /**

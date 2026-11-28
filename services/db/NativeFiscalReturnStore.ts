@@ -1,3 +1,4 @@
+import type { Transaction } from '../../types';
 import { createUuid } from '../../utils/uuid';
 import { assertReturnPreparation, assertReturnAdmission, buildReturnSource, returnContract, returnFiscalTime, returnJSON, sameReturn, returnNeed, type ReturnAttempt } from '../fiscal/FiscalReturnV1';
 import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2, type FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
@@ -6,6 +7,7 @@ import { planFinancialNumbers } from './FinancialNumberReservation';
 import { assertRetirementHasNoEffects } from './FiscalWorkflowRetirementStore';
 import { financialIdentity } from './LargeMasterSyncV3FinancialRetention';
 import { settleOriginalReturnAnnulment } from '../fiscal/ReturnFiscalState';
+import { assertSealedReturnOriginalLines } from '../fiscal/RetainedReturnLine';
 type SQL = {
     query: (sql: string, values?: any[]) => Promise<{
         values?: any[];
@@ -214,7 +216,9 @@ export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommit
     returnNeed(Date.parse(p.preparedAt) <= local && local <= Date.parse(p.expiresAt) && Date.parse(a.checkout!.offlineSaleDate!) <= local && civil(local) === civil(Date.parse(a.checkout!.offlineSaleDate!)), 'FISCAL_RETURN_LOCAL_COMMIT_TIME_REQUIRED');
     const originalRow = (await sql.query("SELECT collection_name,data FROM documents WHERE collection_name IN('transactions','transactionHistory') AND doc_id=? ORDER BY CASE collection_name WHEN 'transactions' THEN 0 ELSE 1 END LIMIT 1", [p.originalReference.transactionId])).values?.[0];
     returnNeed(originalRow, 'FISCAL_RETURN_ORIGINAL_REQUIRED');
-    const intent = JSON.parse(a.intent), expected = buildReturnSource(a, JSON.parse(originalRow.data), intent.seriesId, intent.user);
+    const original = JSON.parse(originalRow.data);
+    assertSealedReturnOriginalLines(original, source.document as Transaction, p);
+    const intent = JSON.parse(a.intent), expected = buildReturnSource(a, original, intent.seriesId, intent.user);
     const withoutNumber = (t: any) => ({ ...t, displayId: undefined, seriesNumber: undefined, globalSequence: undefined });
     returnNeed(financialIdentity(withoutNumber(source.document)) === financialIdentity(withoutNumber(a.source)) && financialIdentity(withoutNumber(source.document)) === financialIdentity(withoutNumber(expected)), 'FISCAL_RETURN_SOURCE_MISMATCH');
     const seriesRow = (await sql.query("SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?", [source.document.seriesId])).values?.[0];

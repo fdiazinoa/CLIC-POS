@@ -1614,7 +1614,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                               });
                               setSuccessNotice(accepted
                                  ? fiscalPending
-                                    ? 'La venta está registrada. La firma de MSeller aún no está disponible: se imprimió una versión genérica una sola vez. Espera unos segundos y reimprime el ticket firmado desde el historial; no repitas el cobro.'
+                                    ? 'La venta está registrada y el ticket se envió a impresión. Cuando esté disponible el timbre, imprime el comprobante fiscal desde el historial.'
                                     : 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
                                  : 'La venta está registrada. Revisa el aviso y vuelve a pulsar Ticket para reintentar sin repetir el cobro.');
                               if (accepted && !canStartNewSale) onClose();

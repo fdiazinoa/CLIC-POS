@@ -44,6 +44,7 @@ const { db } = await import('../utils/db');
 const { dbAdapter } = await import('../services/db');
 const lifecycle = await import('../utils/erpSyncLifecycle');
 const { resolvePosSalesStartView } = await import('../utils/posStartupView');
+const { calculatePointsEarned } = await import('../utils/loyaltyEngine');
 
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const taxId = '7e70f4fd-240d-4665-99c9-603f3615ee0e';
@@ -104,6 +105,7 @@ const runEvent = async (input: {
     snapshotResponses?: Response[];
     observe?: (acks: Array<Record<string, unknown>>) => void;
     onAck?: (body: Record<string, unknown>) => void;
+    onSnapshot?: () => void;
 }) => {
     const event = makeEvent(input.id, input.scopes, input.versions);
     let outboxServed = false;
@@ -119,6 +121,7 @@ const runEvent = async (input: {
         }
         if (url.includes('/config-snapshots/')) {
             snapshotUrls.push(url);
+            input.onSnapshot?.();
             const queued = responses.shift();
             if (queued) return queued;
             return Response.json({
@@ -555,6 +558,294 @@ test('maps nested loyalty into BusinessConfig and legacy loyalty collections', a
     assert.deepEqual(writes.find((write) => write.collection === 'campaigns')?.value, []);
     assert.deepEqual(writes.find((write) => write.collection === 'coupons')?.value, []);
     assert.equal((writes.find((write) => write.collection === 'config')?.value as any).loyalty.earnRate, 2);
+});
+
+test('an ERP loyalty push stores OFF before ACK and stops the checkout points preview', async () => {
+    const { config } = resetHarness();
+    const cart = [{ price: 100, quantity: 1 }] as Parameters<typeof calculatePointsEarned>[0];
+    assert.equal(calculatePointsEarned(cart, config), 10);
+
+    const { result, acks } = await runEvent({
+        id: 'disable-loyalty', scopes: ['loyalty'], versions: { loyalty: 2 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+        onAck: (ack) => {
+            assert.equal(ack.status, 'APPLIED');
+            assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, false);
+        },
+    });
+
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+    const updatedConfig = collections.get('config') as typeof config;
+    assert.equal(updatedConfig.loyalty?.isEnabled, false);
+    assert.equal(calculatePointsEarned(cart, updatedConfig), 0);
+});
+
+test('out-of-order loyalty and mixed terminal ACKs cannot undo a newer OFF rule', async () => {
+    const { config } = resetHarness();
+    const on = config.loyalty;
+    const off = { ...on, isEnabled: false };
+    const loyalty = (version: number, rule: unknown) => runEvent({
+        id: `loyalty-order-${version}`, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { loyalty: { config: rule } } },
+    });
+    const savedConfig = () => collections.get('config') as typeof config;
+    const savedVersion = () => lifecycle.getConfigPushV2Diagnostics().domainVersions.loyalty;
+
+    assert.equal((await loyalty(5, off)).acks[0].status, 'APPLIED');
+    assert.equal(savedConfig().erpLoyaltyPolicyVersion?.version, 5);
+    // Restart after durable OFF was written but before the outbox cursor made it to storage.
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'previous-loyalty', domainVersions: { loyalty: 3 }, inFlight: null,
+    }));
+    const oldest = await loyalty(3, on);
+    assert.equal(oldest.acks[0].status, 'APPLIED');
+    assert.deepEqual(oldest.snapshotUrls, []);
+    assert.equal(savedVersion(), 5);
+
+    const scope = ['terminal_config', 'loyalty'];
+    const versions = { terminal_config: 2, loyalty: 4 };
+    const mixedEvent = makeEvent('mixed-old-loyalty', scope, versions);
+    const mixed = await runEvent({
+        id: mixedEvent.id, scopes: scope, versions,
+        snapshotResponses: [Response.json({
+            status: 'success', snapshot_id: mixedEvent.payload.snapshot_id,
+            version_hash: mixedEvent.payload.version_hash, versions, scopes: ['terminal_config'],
+            domains: { terminal_config: {
+                terminal: { terminal_id: terminalId, config: { loyalty: on, session: { autoLockMinutes: 9 } } },
+                resolved: { loyalty: { config: on } },
+            } },
+        })],
+    });
+    assert.equal(mixed.acks[0].status, 'APPLIED');
+    assert.equal(lifecycle.getConfigPushV2Diagnostics().domainVersions.terminal_config, 2);
+    assert.equal(savedVersion(), 5);
+    assert.equal(savedConfig().loyalty?.isEnabled, false);
+
+    assert.deepEqual((await loyalty(4, on)).snapshotUrls, []);
+    assert.equal(savedVersion(), 5);
+    assert.equal(savedConfig().loyalty?.isEnabled, false);
+    assert.equal((await loyalty(6, on)).acks[0].status, 'APPLIED');
+    assert.equal(savedVersion(), 6);
+    assert.equal(savedConfig().loyalty?.isEnabled, true);
+    assert.equal(savedConfig().erpLoyaltyPolicyVersion?.version, 6);
+});
+
+test('an existing event hash cannot ACK a loyalty policy lost from durable config', async () => {
+    const { config } = resetHarness();
+    const id = 'recover-same-loyalty-hash';
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: `hash-${id}`, domainVersions: { loyalty: 5 }, inFlight: null,
+    }));
+
+    const { acks, snapshotUrls } = await runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+        onAck: (ack) => {
+            assert.equal(ack.status, 'APPLIED');
+            const persisted = collections.get('config') as typeof config;
+            assert.equal(persisted.loyalty?.isEnabled, false);
+            assert.equal(persisted.erpLoyaltyPolicyVersion?.version, 5);
+        },
+    });
+    assert.equal(acks[0].status, 'APPLIED');
+    assert.equal(snapshotUrls.length, 1);
+    assert.doesNotMatch(snapshotUrls[0], /current_version=/);
+});
+
+test('the same terminal needs durable loyalty evidence for its new store', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const off = { ...config.loyalty, isEnabled: false };
+    const send = (id: string, version: number, rule: typeof config.loyalty, storeId: string | null) => runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { ...(storeId ? { store_id: storeId } : {}), loyalty: { config: rule } } },
+    });
+    assert.equal((await send('store-a-off', 5, off, 'store-a')).acks[0].status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.storeId, 'store-a');
+
+    localStorage.setItem('clic_erp_sync_store_id', 'store-b');
+    const wrongBranch = await send('queued-in-store-a', 6, config.loyalty, 'store-a');
+    assert.notEqual(wrongBranch.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, false);
+    const { acks, snapshotUrls } = await send('store-b-on', 2, config.loyalty, 'store-b');
+    assert.equal(acks[0].status, 'APPLIED');
+    assert.equal(snapshotUrls.length, 1);
+    const saved = collections.get('config') as typeof config;
+    assert.equal(saved.erpLoyaltyPolicyVersion?.storeId, 'store-b');
+    assert.equal(saved.erpLoyaltyPolicyVersion?.version, 2);
+    assert.equal(saved.loyalty?.isEnabled, true);
+    const unscoped = await send('old-unscoped-policy', 10, off, null);
+    assert.equal(unscoped.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.version, 2);
+    const midDownload = await runEvent({
+        id: 'changed-store-during-download', scopes: ['loyalty'], versions: { loyalty: 3 },
+        domains: { loyalty: { store_id: 'store-b', loyalty: { config: off } } },
+        onSnapshot: () => localStorage.setItem('clic_erp_sync_store_id', 'store-c'),
+    });
+    assert.notEqual(midDownload.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+});
+
+test('checkout waits for the current ERP store rule after changing branches', async () => {
+    const { config } = resetHarness();
+    const { preserveErpLoyaltyFromLegacyConfig, setErpLoyaltyBindingStoreId } = await import('../utils/loyaltyConfigAuthority');
+    const cart = [{ price: 100, quantity: 1 }] as Parameters<typeof calculatePointsEarned>[0];
+    const saved = () => collections.get('config') as typeof config;
+    const send = (storeId: string, version: number) => runEvent({
+        id: `points-${storeId}`, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { store_id: storeId, loyalty: { config: config.loyalty } } },
+    });
+
+    setErpLoyaltyBindingStoreId(localStorage, 'store-a');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+    assert.equal((await send('store-a', 5)).acks[0]?.status, 'APPLIED');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+
+    setErpLoyaltyBindingStoreId(localStorage, 'store-b');
+    assert.equal(calculatePointsEarned(cart, saved()), 0);
+    assert.ok(dispatchedEvents.some(event => event.type === 'erpLoyaltyBindingStoreChanged'));
+    const refreshed = preserveErpLoyaltyFromLegacyConfig(saved(), config, {
+        tenantId: 'tenant-config-push-contract', terminalId, storeId: 'store-b',
+    });
+    assert.equal(calculatePointsEarned(cart, refreshed), 0);
+    assert.equal(refreshed.erpLoyaltyPolicyVersion?.storeId, 'store-a');
+    collections.set('config', refreshed);
+
+    assert.equal((await send('store-b', 2)).acks[0]?.status, 'APPLIED');
+    assert.equal(calculatePointsEarned(cart, saved()), 10);
+});
+
+test('a stamped loyalty snapshot cannot acknowledge a missing program policy', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const { acks } = await runEvent({
+        id: 'stamped-no-loyalty-policy', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { store_id: 'store-a', loyalty: { config: null, campaigns: [], coupons: [] } } },
+    });
+    assert.notEqual(acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion, undefined);
+});
+
+test('a campaign-only snapshot does not prove a newer program policy was applied', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const send = (id: string, version: number, loyalty: Record<string, unknown>, storeId?: string) => runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { ...(storeId ? { store_id: storeId } : {}), loyalty } },
+    });
+    assert.equal((await send('policy-off', 5, { config: { ...config.loyalty, isEnabled: false } }, 'store-a')).acks[0].status, 'APPLIED');
+    assert.equal((await send('only-campaigns', 7, { config: null, campaigns: [], coupons: [] })).acks[0].status, 'APPLIED');
+    const program = () => (collections.get('config') as typeof config).erpLoyaltyPolicyVersion;
+    assert.equal(program()?.version, 5);
+
+    const genuineChange = await send('policy-on', 6, { config: config.loyalty }, 'store-a');
+    assert.equal(genuineChange.acks[0].status, 'APPLIED');
+    assert.equal(genuineChange.snapshotUrls.length, 1);
+    assert.equal(program()?.version, 6);
+});
+
+test('a loyalty policy without an explicit Boolean cannot be applied or acknowledged', async () => {
+    const { config } = resetHarness();
+    const { acks } = await runEvent({
+        id: 'malformed-loyalty-policy', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: 'false' } } } },
+    });
+    assert.notEqual(acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion, undefined);
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+});
+
+test('writes from kiosk redemption and payment audit retain the latest ERP program rule', async () => {
+    const { config, localTerminalId } = resetHarness();
+    const { persistKioskCouponTicketReference } = await import('../utils/couponService');
+    const { createPaymentIntegrationAuditEvent, dispatchAuditEventConfigUpdate } = await import('../services/payments/paymentIntegrationAudit');
+    const integration = {
+        id: 'integration-active', name: 'Payment test', provider: 'INGENICO_AZUL_WEBAPI',
+        environment: 'TEST', isEnabled: true, baseUrl: 'https://payment.example.test',
+    } as NonNullable<typeof config.integrations>[number];
+    const fallback = { ...config, integrations: [integration], coupons: [{
+        id: 'coupon-active', code: 'TEST-CUPON', campaignId: 'campaign', status: 'ASSIGNED' as const,
+        createdAt: '2026-11-28T12:00:00Z',
+    }] };
+    collections.set('config', fallback);
+    assert.equal((await runEvent({
+        id: 'disable-before-audit', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+    })).acks[0].status, 'APPLIED');
+
+    const couponConfig = await persistKioskCouponTicketReference(
+        db, fallback, 'coupon-active', localTerminalId, 'TICKET-1', () => {},
+    );
+    assert.equal(couponConfig?.coupons?.[0].ticketRef, 'TICKET-1');
+    assert.equal(couponConfig?.coupons?.[0].status, 'REDEEMED');
+    assert.equal(couponConfig?.loyalty?.isEnabled, false);
+    assert.equal(couponConfig?.erpLoyaltyPolicyVersion?.version, 5);
+
+    const event = createPaymentIntegrationAuditEvent(integration, {
+        action: 'SALE', status: 'SUCCESS', message: 'Fixture',
+    });
+    const audited = await dispatchAuditEventConfigUpdate(fallback, integration.id, event);
+    assert.equal(audited?.integrations?.[0].auditEvents?.[0].id, event.id);
+    assert.equal(audited?.coupons?.[0].ticketRef, 'TICKET-1');
+    assert.equal(audited?.loyalty?.isEnabled, false);
+    assert.equal(audited?.erpLoyaltyPolicyVersion?.version, 5);
+});
+
+test('a delayed resolved refresh and pending bootstrap cannot restore earlier unversioned ON', async () => {
+    const { config, localTerminalId } = resetHarness();
+    const { syncManager } = await import('../services/sync/SyncManager');
+    const snapshot = {
+        terminal_id: terminalId,
+        tenant_id: 'tenant-config-push-contract',
+        resolved: { loyalty: { config: { ...config.loyalty, isEnabled: true } } },
+    };
+    const staleBase = { ...config, loyalty: { ...config.loyalty!, isEnabled: false } };
+    const priorRehydrate = db.rehydrateOperationalDocumentState;
+    db.rehydrateOperationalDocumentState = async () => undefined as never;
+    try {
+        const bootstrap = await syncManager.refreshTerminalResolvedConfig(snapshot, {
+            baseConfig: staleBase, supplementalMode: 'skip',
+        });
+        assert.equal(bootstrap?.loyalty?.isEnabled, true);
+        assert.equal(bootstrap?.erpLoyaltyPolicyVersion, undefined);
+
+        let requestStarted!: () => void;
+        let returnOldSnapshot!: (response: Response) => void;
+        const started = new Promise<void>(resolve => { requestStarted = resolve; });
+        const delayedResponse = new Promise<Response>(resolve => { returnOldSnapshot = resolve; });
+        globalThis.fetch = async (request) => {
+            assert.match(String(request), /\/terminals\/[^/]+\/config/);
+            requestStarted();
+            return delayedResponse;
+        };
+        const refresh = syncManager.refreshTerminalResolvedConfig(undefined, {
+            baseConfig: config, supplementalMode: 'skip',
+        });
+        await Promise.race([started, refresh.then(() => { throw new Error('Expected the ERP config request'); })]);
+        try {
+            assert.equal((await runEvent({
+                id: 'durable-disable-loyalty', scopes: ['loyalty'], versions: { loyalty: 5 },
+                domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+            })).acks[0].status, 'APPLIED');
+        } finally {
+            returnOldSnapshot(Response.json({ terminal_config: snapshot }));
+        }
+        const refreshed = await refresh;
+        assert.equal(refreshed?.loyalty?.isEnabled, false);
+        assert.equal(refreshed?.erpLoyaltyPolicyVersion?.version, 5);
+
+        localStorage.setItem('clic_pos_terminal_config_pending_snapshot', JSON.stringify({
+            erpTerminalId: terminalId, localTerminalId, snapshot,
+        }));
+        globalThis.fetch = async () => { throw new Error('ERP unavailable'); };
+        const pending = await syncManager.refreshTerminalResolvedConfig(undefined, { supplementalMode: 'skip' });
+        assert.equal(pending?.loyalty?.isEnabled, false);
+        assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.version, 5);
+    } finally {
+        db.rehydrateOperationalDocumentState = priorRehydrate;
+    }
 });
 
 test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', async () => {

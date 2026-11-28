@@ -204,4 +204,18 @@ test('refund validation rejects malformed lines and missing receipts, and pins m
   session.ready.runtime.version={syncId:'old',syncVersion:1};
   await validate([sealed]);
   await assert.rejects(()=>validate([{...first,price:999}]),/SYNC_V3_RETAINED_LINE_CHANGED/);
+
+  const originalItem = { ...first, discountAmount: 22.50 };
+  (globalThis as any).__refundGuards.items = [originalItem, second];
+  const preparedLine = { cartId: first.cartId, itemId: first.id, quantity: 1, unitPrice: 100,
+    discountAmount: 0, netAmount: 100, taxAmount: 18, totalAmount: 118, originalItem };
+  const preparation = { originalReference: { transactionId: 'original' }, returnSnapshot: { lines: [preparedLine] } };
+  const creditLine = { ...first, discountAmount: 0, netAmount: 100, taxAmount: 18, totalAmount: 118 };
+  const validateSealed = (line: typeof creditLine) => session.validate({terminals:[],taxes},[line],'T','W','REFUND',undefined,
+    {originalTransactionId:'original',sealedReturnPreparation:preparation});
+  await assert.rejects(() => validate([creditLine]), /SYNC_V3_RETAINED_LINE_CHANGED/);
+  await validateSealed(creditLine);
+  for (const tampered of [{ discountAmount: 1 }, { price: 99 }, { totalAmount: 117 }, { id: 'Q' }, { cartId: 'Q' }]) {
+    await assert.rejects(() => validateSealed({ ...creditLine, ...tampered }), /SYNC_V3_RETAINED_LINE_CHANGED/);
+  }
 });

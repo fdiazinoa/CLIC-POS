@@ -216,7 +216,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
           taxable: source.taxable, appliedTaxIds: [...(source.appliedTaxIds || [])],
           v3SaleAuthority: { ...line.v3SaleAuthority! } });
       }, { ticketId: transaction.restaurantOrderId, tableId: transaction.restaurantTableId, claimId: transaction.v3RestoredTicketId,
-        originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId, reservationId: transaction.v3ReservationClaimId ? transaction.reservationId : undefined, reservationClaimId:transaction.v3ReservationClaimId });
+        originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId,
+        sealedReturnPreparation: returnAttempt?.preparation, reservationId: transaction.v3ReservationClaimId ? transaction.reservationId : undefined, reservationClaimId:transaction.v3ReservationClaimId });
     if (!options.refund && retained && retained.collection !== 'transactions' && retained.collection !== 'transactionHistory') {
       documents.push({ collectionName: 'v3TicketSettlements', document: { id: retained.id, transactionId: transaction.id, binding: session.binding },
         requireAbsent: true, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });

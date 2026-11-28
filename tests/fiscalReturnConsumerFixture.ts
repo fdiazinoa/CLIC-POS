@@ -17,7 +17,7 @@ import type { ReturnCommand, ReturnPreparation, ReturnCapability } from '../serv
 import type { Transaction } from '../types';
 export async function returnFixture(database?: any, seed = true, server?: {
     preparations: Map<string, ReturnPreparation>;
-}, external?: any, consumerFinalE32 = false, options: { useHttpPreparation?: boolean; fiscalClockOffsetMs?: number } = {}) {
+}, external?: any, consumerFinalE32 = false, options: { useHttpPreparation?: boolean; fiscalClockOffsetMs?: number; sourceLineDiscount?: number } = {}) {
     const serverNow = () => Date.now() + (options.fiscalClockOffsetMs ?? 0);
     const f = await nativeFixture(database, seed), scope = external?.scope || { tenantId: id(1), companyId: id(2), storeId: id(3), terminalId: id(4), deviceId: id(50) };
     const credentials = { ...scope, erpTenantId: scope.tenantId, erpTerminalId: scope.terminalId, deviceToken: 'synthetic', authStatus: 'BOUND' };
@@ -42,6 +42,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
         original = { id: id(201), displayId: 'SALE-1', date: new Date().toISOString(), terminalId: scope.terminalId, documentType: 'TICKET', status: 'COMPLETED', ncfType: 'E32', ncf: 'E320000000001', currency: 'DOP', exchangeRate: 1, isTaxIncluded: true,
             v3Binding: stamp.binding, v3InventoryBaseline: JSON.stringify([stamp.binding, stamp.syncId, stamp.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]), v3WarehouseId: id(5), fiscalMode: 'ECF', fiscalProvider: 'MSELLER', total: 10, netAmount: 8.47, taxAmount: 1.53, discountAmount: 0, pendingBalance: 0, relatedTransactions: [], customerSnapshot: consumerFinalE32 ? null : { taxId: '101010102', name: 'Synthetic buyer' }, userId: 'user', userName: 'User',
             items: [{ category: 'Synthetic', images: [], attributes: [], variants: [], tariffs: [], id: id(7), cartId: 'line', name: 'Synthetic', type: 'PRODUCT', quantity: 1, price: 10, isInventoriable: true, taxable: true, taxRate: .18, appliedTaxIds: ['TX'], netAmount: 8.47, taxAmount: 1.53, totalAmount: 10, cost: 35, v3SaleAuthority: stamp }], payments: [{ id: id(202), method: 'CASH', methodId: 'cash', amount: 10, timestamp: new Date().toISOString() }] } as unknown as Transaction;
+        if (options.sourceLineDiscount !== undefined) original.items[0].discountAmount = options.sourceLineDiscount;
         if (external) {
             original = structuredClone(external.source.transaction);
             // The ERP fixture changes scope on the frozen line authority but retains a
@@ -80,7 +81,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
     const localClient = createFiscalWorkflowV2Client({ store: () => f.adapter.fiscalWorkflowStore, readOfflineAuthority: () => offlineFiscalAuthorityFromConfig(config, credentials, scope.deviceId), readAuth: () => { throw Error('NO_PUBLIC_NETWORK'); } } as any);
     const preparations = server?.preparations || new Map<string, ReturnPreparation>();
     let commitTransform: ((tx:Transaction)=>Transaction)|undefined;
-    let proofTransform: ((p: ReturnPreparation) => ReturnPreparation) | undefined;
+    let proofTransform: ((p: ReturnPreparation) => ReturnPreparation | Promise<ReturnPreparation>) | undefined;
     let prepareCalls: string[] = [], offline = false, losePrepare = false, deny = false;
     const prepare = async (bytes: string) => {
         prepareCalls.push(bytes);
@@ -169,5 +170,5 @@ export async function returnFixture(database?: any, seed = true, server?: {
                 throw Error('FISCAL_RETURN_UNAVAILABLE'); return capability; }, prepare: options.useHttpPreparation ? httpPreparation : prepare }, workflow: { ...localClient, consult: (id, signal, timeoutMs) => consultOriginal(id, signal, timeoutMs) }, readOriginal: async () => (await f.adapter.getDocument<Transaction>('transactions', original.id))!,
         commit: commitSource });
     const run = (q = 1) => client.process(original, [{ ...original.items[0], quantity: q }], new Map([['line', 'SELLABLE']]), 'Synthetic return', id(10), { id: 'user', name: 'User' });
-    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, setConsult: (handler: typeof consultOriginal) => { consultOriginal = handler; }, commitSource, preparations, prepareCalls, setCommitTransform:(transform:(tx:Transaction)=>Transaction)=>commitTransform=transform, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
+    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, setConsult: (handler: typeof consultOriginal) => { consultOriginal = handler; }, commitSource, preparations, prepareCalls, setCommitTransform:(transform:(tx:Transaction)=>Transaction)=>commitTransform=transform, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation | Promise<ReturnPreparation>) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
 }

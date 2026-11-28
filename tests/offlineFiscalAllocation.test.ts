@@ -5,14 +5,14 @@ import {DISPATCH_POOL_INSTALL_SCHEMA,DISPATCH_STORE_POLICY_SCHEMA_V2} from '../s
 import {describeV3Error} from '../utils/v3ErrorMessages';
 import {COMPANY_DISPATCH_ESCROW_SCHEMA} from '../services/db/CompanyDispatchEscrowStore';
 import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
-import test from 'node:test';
+import test, {type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {createContext,Script} from 'node:vm';
 import ts from 'typescript';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
-import {FISCAL_WORKFLOW_V2_SCHEMA,NativeFiscalWorkflowV2Store} from '../services/db/FiscalWorkflowV2Store';
+import {consumeFiscalWorkflowBirth,FISCAL_WORKFLOW_V2_SCHEMA,NativeFiscalWorkflowV2Store} from '../services/db/FiscalWorkflowV2Store';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA,allocationAvailability,allocationCommitPreconditions,readAllocationSelection} from '../services/db/OfflineFiscalAllocationStore';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA} from '../services/db/NativeFiscalReservation';
 import {DURABLE_OUTBOX_SCHEMA_SQL} from '../services/sync/DurableOutboxSchema';
@@ -22,23 +22,30 @@ import {planFinancialNumbers} from '../services/db/FinancialNumberReservation';
 import {tableFiscalSourceDigest} from '../services/fiscal/OfflineFiscalLease';
 import {createFiscalWorkflowV2Client} from '../services/fiscal/FiscalWorkflowV2Client';
 import {assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope} from '../services/fiscal/FiscalWorkflowCheckoutReplay';
+import {ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA} from '../services/db/AbsoluteFiscalRecoveryStore';
+import {TRACKING_ALLOCATION_SCHEMA} from '../services/db/TrackingAllocationStore';
+import {absoluteFiscalConfirmationBytes} from '../services/fiscal/AbsoluteFiscalRecoveryConfirmation';
+import {cartDigest} from '../services/fiscal/FiscalWorkflowRetirement';
+import {stableCheckoutAttemptId} from '../utils/checkoutAttemptIdentity';
 const uuid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:uuid(1),deviceId:'device'};
-const credentials={...scope,erpTenantId:scope.tenantId,erpTerminalId:scope.terminalId,deviceToken:'synthetic-device',syncToken:'expired',syncTokenExpiresAt:'2020-01-01',authStatus:'BOUND'};
-async function fixture({buffer=true,expiry=null as string|null,download=true,blockEnd=3}={}){
+const credentialsFor=(scope: {tenantId:string;companyId:string;storeId:string;terminalId:string;deviceId:string})=>({...scope,erpTenantId:scope.tenantId,erpTerminalId:scope.terminalId,deviceToken:'synthetic-device',syncToken:'expired',syncTokenExpiresAt:'2020-01-01',authStatus:'BOUND'});
+const credentials=credentialsFor(scope);
+async function fixture({buffer=true,expiry=null as string|null,download=true,blockEnd=3,fixtureScope=scope,issuer='101010101',environment=0 as 0|1|2}={}){
+ const scope=fixtureScope,credentials=credentialsFor(scope);
  const entries=new Map([['clic_terminal_credentials_v1',JSON.stringify(credentials)],['CLIC_POS_DEVICE_ID','device']]);
  Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>entries.get(k)||null,setItem:(k:string,v:string)=>entries.set(k,v),removeItem:(k:string)=>entries.delete(k)},configurable:true});
- const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_RETURN_SCHEMA+FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+DISPATCH_POOL_INSTALL_SCHEMA+DISPATCH_STORE_POLICY_SCHEMA_V2+LARGE_MASTER_SYNC_V3_SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS master_v3_operational_owner \([\s\S]*?\n\);/)![0]+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT);`+NATIVE_FISCAL_RECEIPTS_SCHEMA+OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA);
+ const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_RETURN_SCHEMA+FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+TRACKING_ALLOCATION_SCHEMA+DISPATCH_POOL_INSTALL_SCHEMA+DISPATCH_STORE_POLICY_SCHEMA_V2+LARGE_MASTER_SYNC_V3_SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS master_v3_operational_owner \([\s\S]*?\n\);/)![0]+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT);`+NATIVE_FISCAL_RECEIPTS_SCHEMA+OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA+ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA);
  const range={id:uuid(2),type:'E32',prefix:'E32',startNumber:1,endNumber:blockEnd,isActive:true,expiryDate:expiry||''};
  const allocation={id:uuid(3),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',reservedStart:1,reservedEnd:blockEnd,nextNumber:buffer?blockEnd+1:1,status:'ACTIVE',releasedAt:null};
- const config:any={id:'current',companyInfo:{rnc:'101010101'},terminals:[{id:scope.terminalId,config:{erpBinding:scope,erpTerminalId:scope.terminalId,currentDeviceId:'device',isPrimaryNode:true,governedByMaster:false,syncConfig:{mode:'MASTER'},fiscal:{providerId:'MSELLER',mode:'ECF',enabled:true,environment:0,credentialKey:'101010101',fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
+ const config:any={id:'current',companyInfo:{rnc:issuer},terminals:[{id:scope.terminalId,config:{erpBinding:scope,erpTerminalId:scope.terminalId,currentDeviceId:'device',isPrimaryNode:true,governedByMaster:false,syncConfig:{mode:'MASTER'},fiscal:{providerId:'MSELLER',mode:'ECF',enabled:true,environment,credentialKey:issuer,fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
  const put=(collection:string,doc:any)=>sql.prepare('INSERT INTO documents(collection_name,doc_id,data)VALUES(?,?,?)').run(collection,doc.id,JSON.stringify(doc));
  put('config',config);put('fiscalRanges',range);put('fiscalAllocations',allocation);put('internalSequences',{id:'SERIES',documentType:'TICKET',prefix:'T-',padding:6,nextNumber:1,active:true});
  if(buffer)put('localFiscalBuffer',{id:uuid(4),type:'E32',prefix:'E32',currentNumber:1,startNumber:1,endNumber:blockEnd,expiryDate:expiry||'',terminalId:scope.terminalId,fiscalRangeId:range.id,allocationId:allocation.id});
  let fault='';const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>{if(fault&&(q.includes(fault)||v.includes(fault)))throw Error('SYNTHETIC_DISK_FAILURE');return {changes:sql.prepare(q).run(...v)};},execute:async(q:string)=>sql.exec(q),beginTransaction:async()=>sql.exec('BEGIN IMMEDIATE'),commitTransaction:async()=>{sql.exec('COMMIT');if(fault==='COMMIT_ACK_LOST')throw Error('LOST_COMMIT_ACK');},rollbackTransaction:async()=>sql.exec('ROLLBACK'),isTransactionActive:async()=>({result:sql.isTransaction})};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});const store=adapter.fiscalWorkflowStore;
  const local=await offlineFiscalAuthorityFromConfig(config,credentials,'device'),now=Date.now();
- const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(5),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(now-1000).toISOString(),bindingFingerprint:'a'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',padding:10,start:1,end:blockEnd,rangeStart:1,rangeEnd:blockEnd,expiryDate:expiry}]};
+ const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(5),scope,issuerRnc:issuer,provider:'MSELLER',environment,issuedAt:new Date(now-1000).toISOString(),bindingFingerprint:'a'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',padding:10,start:1,end:blockEnd,rangeStart:1,rangeEnd:blockEnd,expiryDate:expiry}]};
  const grant:OfflineFiscalAllocation={...unsigned,authorityHash:await allocationHash(unsigned)};if(download)await store.saveAllocation!(grant,local,new Date(now).toISOString());
  const client=()=>createFiscalWorkflowV2Client({store:()=>store,readOfflineAuthority:()=>offlineFiscalAuthorityFromConfig(config,credentials,'device'),readAuth:()=>{throw Error('EXPIRED_TRANSPORT');},fetchImpl:async()=>{throw Error('NO_NETWORK_ALLOWED');}} as any);
  const count=(table:string)=>Number(sql.prepare('SELECT count(*) n FROM '+table).get()!.n);
@@ -309,6 +316,128 @@ test('old ERP or V2 OFF keeps the real V1 fallback and reports disabled preparat
  const paths:string[]=[];const client=createFiscalWorkflowV2Client({store:()=>f.store,readOfflineAuthority:async()=>f.local,readAuth:()=>({base:'https://synthetic.invalid/api/sync',headers:{},descriptor:scope,assertCurrent:()=>{}}),fetchImpl:async(url:any)=>{paths.push(String(url));return {ok:false,json:async()=>({code:String(url).includes('offline-allocation')?'FISCAL_ALLOCATION_DISABLED':'FISCAL_OFFLINE_DISABLED'})};}} as any);
  await assert.rejects(client.prepareOfflineAuthority(),/FISCAL_OFFLINE_DISABLED/);assert.equal(paths.length,2);assert.equal((await client.offlineReadiness()).reason,'PREPARATION_DISABLED');assert.equal((await client.offlineReadiness()).code,'FISCAL_OFFLINE_DISABLED');assert.equal(f.count('pos_fiscal_permits_v2'),0);assert.equal(f.count('pos_offline_fiscal_allocations_v2'),0);
  }finally{f.sql.close();}});
+
+test('diagnostics explain why a V2 allocation with a possible payment cannot be released as a permit', async () => {
+ const f = await fixture();
+ try {
+  const checkout = await f.client().reserveOfflineCheckout(identity('release-diagnostics'), uuid(90));
+  await f.client().recordPayment(checkout, 'original-payment');
+  assert.equal(checkout.permit, null);
+  const pendingNumber = f.sql.prepare('SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?');
+  const originalClaim = pendingNumber.get(checkout.checkoutId);
+  assert.equal(originalClaim!.state, 'EFFECT_POSSIBLE');
+
+  const client = createFiscalWorkflowV2Client({
+   store: () => f.store,
+   readOfflineAuthority: async () => f.local,
+   readAuth: () => ({ base: 'https://synthetic.invalid/api/sync', headers: {}, descriptor: scope, assertCurrent() {} }),
+   fetchImpl: async () => { throw Error('NO_NETWORK_ALLOWED'); },
+  } as any);
+  assert.equal((await client.diagnostics()).attemptAuthority, 'V2_ALLOCATION');
+  const outcome = await client.releasePendingAttempt('Fixture supervisor');
+  assert.equal(outcome.released, false);
+  assert.match(outcome.note, /FISCAL_ATTEMPT_RELEASE_NOT_SAFE: MISSING_PERMIT$/);
+  assert.deepEqual(await f.store.currentCheckout(checkout.scopeKey), checkout);
+  assert.deepEqual(pendingNumber.get(checkout.checkoutId), originalClaim);
+  assert.equal(f.count('pos_fiscal_attempt_releases_v1'), 0);
+  assert.equal(f.count('sync_outbox_v2'), 0);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM documents WHERE collection_name IN ('transactions','transactionHistory','nativeFiscalReservations')").get()!.n, 0);
+ } finally { f.sql.close(); }
+});
+
+const absoluteScope={tenantId:'b2e01916-309a-414f-b9f0-636352d25318',companyId:'39ac760d-bd18-4611-8251-84eaec00dea1',storeId:'7f3a2d1a-4d10-4f9c-afed-9b4d55f417c2',terminalId:'31d2162e-1767-4f74-8e72-7c73a3341e96',deviceId:'device'};
+const absoluteCheckoutId='496e3827-0000-4000-8000-000000000001';
+const absoluteMarker=`${uuid(98)}:payment:0`;
+
+async function absoluteFixture(t: TestContext) {
+ const f=await fixture({fixtureScope:absoluteScope,issuer:'131397662',environment:2});
+ t.after(()=>f.sql.close());
+ let next=0;
+ const randomness=t.mock.method(globalThis.crypto,'randomUUID',()=>next++===0?absoluteCheckoutId:uuid(96));
+ let checkout;
+ try { checkout=await f.client().reserveOfflineCheckout(identity('absolute'),uuid(97)); }
+ finally { randomness.mock.restore(); }
+ await f.client().recordPayment(checkout,absoluteMarker);
+ const candidate=await f.store.readAbsoluteRecoveryCandidate(absoluteScope);
+ assert.equal(candidate?.checkoutId,absoluteCheckoutId);
+ assert.equal(checkout.paymentIds[0],absoluteMarker);
+ assert.notEqual(checkout.operationId,uuid(98));
+ const keys=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+ const fixtureStore=new NativeFiscalWorkflowV2Store(()=>f.bridge,action=>action(),await crypto.subtle.exportKey('jwk',keys.publicKey));
+ const sign=async (checkedAtMs:number, target=candidate!)=>{
+  const signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys.privateKey,absoluteFiscalConfirmationBytes(target,checkedAtMs));
+  return `${checkedAtMs}.${Buffer.from(signature).toString('hex')}`;
+ };
+ const confirmation=await sign(Date.now());
+ const verifiedClient=createFiscalWorkflowV2Client({store:()=>fixtureStore,readAuth:()=>({descriptor:absoluteScope,assertCurrent(){}})} as any);
+ return { ...f, checkout, candidate:candidate!, sign, fixtureStore, confirmation, release:()=>verifiedClient.releaseAbsoluteRecovery(candidate!,candidate!.ncf,confirmation,'Fixture supervisor') };
+}
+
+test('audited Absolute release leaves the exact identity fenced and E32 available, without writing a sale or advancing numbering',async t=>{
+ const f=await absoluteFixture(t);
+ const cursor=f.sql.prepare("SELECT data FROM documents WHERE collection_name='localFiscalBuffer'");
+ const original=cursor.get();
+ assert.equal(stableCheckoutAttemptId(f.checkout.cartIdentity,()=>uuid(98)),uuid(98));
+ assert.equal(stableCheckoutAttemptId('other-cart',()=>uuid(98)),uuid(98));
+ assert.throws(()=>f.sql.prepare("UPDATE pos_fiscal_pending_numbers_v2 SET state='ABANDONED' WHERE checkout_id=?").run(absoluteCheckoutId), /OWNER_IMMUTABLE/);
+ await f.release();
+ assert.equal(stableCheckoutAttemptId(f.checkout.cartIdentity,()=>uuid(109)),uuid(109));
+ assert.equal(stableCheckoutAttemptId('other-cart',()=>uuid(109)),uuid(98));
+ const proof=f.sql.prepare('SELECT * FROM pos_absolute_fiscal_recovery_v2').get()!;
+ assert.equal(proof.checkout_id,absoluteCheckoutId);
+ assert.equal(proof.remote_reference,await cartDigest(f.confirmation));
+ assert.equal(proof.authority_hash,f.grant.authorityHash);
+ assert.equal(proof.checkout_json,JSON.stringify(f.checkout));
+ assert.equal((await f.store.currentCheckout(f.checkout.scopeKey)),null);
+ assert.equal(f.sql.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?').get(absoluteCheckoutId)!.state,'ABANDONED');
+ assert.deepEqual(cursor.get(),original);
+ assert.equal(f.count('sync_outbox_v2'),0);
+ assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name IN ('transactions','transactionHistory','nativeFiscalReservations')").get()!.n,0);
+ await assert.rejects(f.release,/CHECKOUT_MISMATCH/);
+ await assert.rejects(f.store.markPaymentPossible(absoluteCheckoutId,absoluteMarker),/OFFLINE_FISCAL_ABANDONED/);
+ await assert.rejects(consumeFiscalWorkflowBirth(f.bridge,{checkoutId:absoluteCheckoutId,transactionId:f.checkout.transactionId,birth:null},{} as any),/OFFLINE_FISCAL_ABANDONED/);
+ assert.throws(()=>f.sql.prepare("UPDATE pos_absolute_fiscal_recovery_v2 SET actor='other'").run(),/RECOVERY_IMMUTABLE/);
+ assert.throws(()=>f.sql.prepare('INSERT INTO pos_fiscal_checkout_current_v2 VALUES(?,?)').run(f.checkout.scopeKey,absoluteCheckoutId),/RECOVERY_FENCED/);
+ assert.throws(()=>f.sql.prepare(`INSERT INTO payment_intents_v2(intent_id,idempotency_key,payment_id,provider,amount,currency_code,status,created_at,updated_at)
+  VALUES('late','late',?,'AZUL',100,'DOP','CREATED','now','now')`).run(absoluteMarker),/RECOVERY_FENCED/);
+ assert.throws(()=>f.sql.prepare(`INSERT INTO sync_outbox_v2(event_id,event_type,aggregate_type,aggregate_id,schema_version,payload_json,created_at,updated_at)
+  VALUES('late','SALE_POSTED','TRANSACTION',?,1,'{}','now','now')`).run(f.checkout.transactionId),/RECOVERY_FENCED/);
+ const availability=await f.store.allocationAvailability(f.local,'E32');
+ assert.equal(availability?.remaining.E32,3);
+ const next=await f.client().reserveOfflineCheckout(identity('new-sale'),f.checkout.operationId);
+ assert.notEqual(next.operationId,f.checkout.operationId);
+ assert.notEqual(next.checkoutId,absoluteCheckoutId);
+});
+
+test('audited Absolute release refuses a stale snapshot, incorrect e-NCF or an existing unbound provider intent',async t=>{
+ const f=await absoluteFixture(t);
+ const tryRelease=async (confirmation:string)=>f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,f.candidate,f.candidate.ncf,confirmation,'Fixture supervisor');
+ await assert.rejects(f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,f.candidate,'E320000000002',f.confirmation,'Fixture supervisor'),/CONFIRMATION_MISMATCH/);
+ await assert.rejects(f.fixtureStore.releaseAbsoluteRecovery(absoluteScope,{...f.candidate,snapshotHash:'c'.repeat(64)},f.candidate.ncf,f.confirmation,'Fixture supervisor'),/CHECKOUT_MISMATCH/);
+ await assert.rejects(tryRelease('b'.repeat(64)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(`${Date.now()}.${'0'.repeat(128)}`),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now(),{...f.candidate,transactionId:uuid(100)})),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now()-660_000)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(tryRelease(await f.sign(Date.now()+120_000)),/REMOTE_CONFIRMATION_INVALID/);
+ await assert.rejects(f.store.releaseAbsoluteRecovery(absoluteScope,f.candidate,f.candidate.ncf,f.confirmation,'Fixture supervisor'),/REMOTE_CONFIRMATION_INVALID/);
+ f.sql.prepare(`INSERT INTO payment_intents_v2(intent_id,idempotency_key,payment_id,provider,amount,currency_code,status,created_at,updated_at)
+  VALUES('held','held',?,'AZUL',100,'DOP','UNKNOWN','now','now')`).run(absoluteMarker);
+ await assert.rejects(f.release,/PAYMENT_INTENT_EXISTS/);
+ assert.equal(f.count('pos_absolute_fiscal_recovery_v2'),0);
+ assert.deepEqual(await f.store.currentCheckout(f.checkout.scopeKey),f.checkout);
+});
+
+test('audited Absolute release rejects a historical fiscal alias and rolls back when writer fails after proof insertion',async t=>{
+ const f=await absoluteFixture(t);
+ f.put('transactionHistory',{id:uuid(99),ncf:'E321'});
+ await assert.rejects(f.release,/LOCAL_RECEIPT_EXISTS/);
+ f.sql.prepare("DELETE FROM documents WHERE collection_name='transactionHistory' AND doc_id=?").run(uuid(99));
+ f.setFault("UPDATE pos_fiscal_pending_numbers_v2 SET state='ABANDONED'");
+ await assert.rejects(f.release,/SYNTHETIC_DISK_FAILURE/);
+ assert.equal(f.count('pos_absolute_fiscal_recovery_v2'),0);
+ assert.deepEqual(await f.store.currentCheckout(f.checkout.scopeKey),f.checkout);
+ assert.equal(f.sql.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?').get(absoluteCheckoutId)!.state,'EFFECT_POSSIBLE');
+});
 
 test('additive authority expansion preserves original PREPARED and possible-payment identities after restart',async()=>{
  for(const effects of [false,true]){const f=await fixture();try{

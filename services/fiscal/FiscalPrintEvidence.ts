@@ -105,6 +105,18 @@ export const resolveFiscalPrintBudget=(timeoutMs:number|undefined=DEFAULT_FISCAL
 export const requiresMSellerPrintSignature = (tx: Transaction): boolean =>
  tx.fiscalProvider === 'MSELLER' && Boolean(tx.fiscalWorkflowCheckoutId);
 
+/** Only a retained, fully paid sale can produce a non-fiscal payment receipt. */
+export function canPrintMSellerPaymentReceipt(tx: Transaction | null | undefined): boolean {
+    return Boolean(tx && requiresMSellerPrintSignature(tx)
+        && (tx.ncfType === 'E31' || tx.ncfType === 'E32')
+        && (!tx.documentType || tx.documentType === 'TICKET')
+        && tx.status === 'COMPLETED'
+        && tx.payments?.some(payment => Number(payment?.amount) > 0)
+        && tx.payments.every(payment => typeof payment?.method === 'string'
+            && payment.method.trim() && payment.method.trim().toUpperCase() !== 'CREDIT'));
+}
+
+
 
 export function terminalUsesMSellerRealtimePrint(
     transaction: Transaction,
@@ -138,11 +150,12 @@ export const MSELLER_PRINT_WAIT_MS = 30_000;
 /** Explicit print/email readiness. Only opted-in ticket printing waits for V2 evidence with private hints. */
 export async function resolveFiscalPrintReadiness(
     tx: Transaction,
-    { timeoutMs, signal, waitForSignature = false, useRealtimeHint = false }: {
+    { timeoutMs, signal, waitForSignature = false, useRealtimeHint = false, allowPaymentReceipt = false }: {
         timeoutMs?: number;
         signal?: AbortSignal;
         waitForSignature?: boolean;
         useRealtimeHint?: boolean;
+        allowPaymentReceipt?: boolean;
     } = {},
 ): Promise<FiscalPrintDisplay | undefined> {
     const initialDisplay = useRealtimeHint ? undefined : await resolveFiscalPrintDisplay(tx);
@@ -151,7 +164,7 @@ export async function resolveFiscalPrintReadiness(
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
-    const queuedWithoutHint = waitForSignature && !useRealtimeHint;
+    const queuedWithoutHint = waitForSignature && !useRealtimeHint && !allowPaymentReceipt;
     const budget = useRealtimeHint
         ? Math.min(MSELLER_PRINT_WAIT_MS, resolveFiscalPrintBudget(timeoutMs ?? MSELLER_PRINT_WAIT_MS))
         : resolveFiscalPrintBudget(timeoutMs);

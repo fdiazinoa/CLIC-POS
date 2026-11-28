@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  canPrintMSellerPaymentReceipt,
   DEFAULT_FISCAL_PRINT_WAIT_MS,
   MAX_FISCAL_PRINT_WAIT_MS,
   resolveFiscalPrintBudget,
@@ -10,7 +11,7 @@ import {
 import { fiscalStatusSourceChecksum } from '../services/fiscal/FiscalStatusProof';
 
 /** Signed ERP workflow state for a sale that only gets its signature after the first polls. */
-async function workflowFixture() {
+async function workflowFixture(retainedSale = false) {
   const binding = JSON.stringify(['tenant', 'terminal', 'device', 'https://erp.invalid', 'https://erp.invalid']);
   const tx: any = {
     id: 'original', date: '2026-10-16T03:30:00Z', terminalId: 'terminal', ncf: 'E310000001021', electronicNcf: 'E310000001021',
@@ -19,6 +20,7 @@ async function workflowFixture() {
     v3InventoryBaseline: JSON.stringify([binding, 'S', 1, 1, 'C']),
     items: [{ id: 'P', cartId: 'P', name: 'Water', quantity: 1, price: 352, netAmount: 352, taxAmount: 0, totalAmount: 352, v3SaleAuthority: { binding } }],
     payments: [{ method: 'CASH', amount: 352 }], total: 352, netAmount: 352, taxAmount: 0,
+    ...(retainedSale ? { fiscalWorkflowCheckoutId: 'permit', status: 'COMPLETED', documentType: 'TICKET' } : {}),
     fiscalIssuance: { issuerRnc: '130090752', tenantId: 'tenant', companyId: 'company', terminalId: 'terminal' },
   };
   const envelope = { transaction: JSON.parse(JSON.stringify(tx)) };
@@ -100,22 +102,78 @@ test('el presupuesto de espera mantiene default 8 s, amplía hasta 60 s y nunca 
   assert.equal(resolveFiscalPrintBudget(Number.NaN), 8000);
 });
 
-test('la primera impresión pasa su presupuesto sin cambiar el de historial ni imprimir MSeller sin firma', () => {
+test('el ticket pasa su presupuesto y exige firma fiscal fuera de la constancia permitida', () => {
   const printer = readFileSync(new URL('../utils/printer.ts', import.meta.url), 'utf8');
   assert.match(printer, /fiscalWaitMs\?: number/);
   assert.match(printer, /resolveFiscalPrintReadiness\(transaction,\s*\{\s*waitForSignature, useRealtimeHint, timeoutMs: useRealtimeHint \? undefined : options\.fiscalWaitMs/);
-  const signatureGuard = printer.indexOf("throw new PrintOutputError('MSELLER_SIGNATURE_REQUIRED')");
-  const legacyFallback = printer.indexOf('if (!fiscalPrint) options.onFiscalPending?.()');
-  assert.ok(signatureGuard >= 0 && signatureGuard < legacyFallback);
+  assert.match(printer, /canPrintMSellerPaymentReceipt\(retained\)/);
+  assert.match(printer, /if \(!allowPaymentReceipt\) throw new PrintOutputError\('MSELLER_SIGNATURE_REQUIRED'\)/);
+  assert.match(printer, /printTicketInternal\(transaction, config, undefined, true\)/);
+  assert.match(printer, /!paymentReceipt && receiptConfig\?\.showQr/);
   assert.match(printer, /if \(waitForSignature && !isVerifiedFiscalPrintDisplay\(fiscalPrint\)\)/);
 
   const payment = readFileSync(new URL('../components/PaymentModal.tsx', import.meta.url), 'utf8');
   assert.match(payment, /fiscalWaitMs: 10000/);
   assert.match(payment, /'Generando comprobante fiscal firmado…'/);
-  assert.match(payment, /se imprimió una versión genérica una sola vez/);
+  assert.match(payment, /el ticket se envió a impresión/);
   assert.match(payment, /printTicketPending\.current/);
   assert.match(payment, /if \(accepted && !canStartNewSale\) onClose\(\);/);
 
   const history = readFileSync(new URL('../components/TicketHistory.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(history, /fiscalWaitMs/, 'las reimpresiones desde historial mantienen el default corto');
+});
+
+
+test('429 entrega una constancia sin datos fiscales y la recuperación imprime el original firmado', async t => {
+  const { fiscalWorkflowV2Client: client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+  const { printTicket } = await import('../utils/printer');
+  const { dbAdapter } = await import('../services/db');
+  const { PrintRouterService } = await import('../services/printer/PrintRouterService');
+  const { tx: retained, state } = await workflowFixture(true);
+  const config: any = {
+    currencySymbol: 'RD$', taxRate: 0, taxes: [], receiptConfig: { showQr: true },
+    companyInfo: { name: 'Synthetic' }, currencies: [],
+  };
+  assert.equal(canPrintMSellerPaymentReceipt(retained), true);
+  assert.equal(canPrintMSellerPaymentReceipt(undefined), false);
+  assert.equal(canPrintMSellerPaymentReceipt({ ...retained, ncfType: 'E34', documentType: 'REFUND' }), false);
+  assert.equal(canPrintMSellerPaymentReceipt({ ...retained, status: 'PENDING' }), false);
+  assert.equal(canPrintMSellerPaymentReceipt({ ...retained, payments: [{ method: 'CREDIT', amount: 352 }] }), false);
+  assert.equal(canPrintMSellerPaymentReceipt({ ...retained, payments: [] }), false);
+
+  let cached = null as typeof state | null;
+  const consult = t.mock.method(client, 'consult', async () => ({
+    ...state, decision: 'PENDING', state: 'OUTCOME_UNKNOWN', reason: 'FISCAL_WORKFLOW_PROVIDER_HTTP_429', signature: undefined,
+  }));
+  t.mock.method(client, 'enabled', () => true);
+  t.mock.method(client, 'cached', async () => cached);
+  t.mock.method(dbAdapter, 'getDocument', async () => retained);
+  t.mock.method(dbAdapter, 'getCollection', async () => []);
+  const jobs: Array<{ referenceId: string; text: string }> = [];
+  t.mock.method(PrintRouterService, 'routeAndPrintEscPos', async ({ referenceId, escPosBase64 }) => {
+    jobs.push({ referenceId, text: Buffer.from(escPosBase64, 'base64').toString('utf8') });
+    return true;
+  });
+
+  const before = JSON.stringify(retained);
+  const printing = printTicket(retained, config, undefined, { fiscalWaitMs: 80 });
+  assert.equal(printTicket(retained, config), printing);
+  assert.equal(await printing, true);
+  assert.ok(consult.mock.callCount() > 0);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].referenceId, 'original:payment-receipt');
+  assert.match(jobs[0].text, /CONSTANCIA DE PAGO/);
+  assert.match(jobs[0].text, /SIN VALIDEZ FISCAL/);
+  assert.match(jobs[0].text, /352\.00/);
+  assert.doesNotMatch(jobs[0].text, /E310000001021|ConsultaTimbre|Codigo de seguridad|ESCANEA ESTE TICKET/);
+  assert.equal(JSON.stringify(retained), before);
+
+  cached = state;
+  assert.equal(await printTicket(retained, config), true);
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[1].referenceId, jobs[0].referenceId.replace(':payment-receipt', ''));
+  assert.match(jobs[1].text, /E310000001021/);
+  assert.match(jobs[1].text, /Codigo de seguridad: NVrTbH/);
+  assert.match(jobs[1].text, /ConsultaTimbre/);
+  assert.doesNotMatch(jobs[1].text, /SIN VALIDEZ FISCAL/);
 });

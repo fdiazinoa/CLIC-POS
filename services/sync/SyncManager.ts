@@ -92,7 +92,8 @@ import { protectsLocalCatalogFromCloud, syncPolicy, updateClientMasterUrl } from
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
-import { isConfigPushV2Enabled } from '../../utils/erpSyncLifecycle';
+import { getStoredErpSyncBinding, isConfigPushV2Enabled } from '../../utils/erpSyncLifecycle';
+import { preserveErpLoyaltyFromLegacyConfig, withErpLoyaltyConfigWrite } from '../../utils/loyaltyConfigAuthority';
 import { syncTriggerCoordinator } from './SyncTriggerCoordinator';
 import { normalizeCanonicalErpTerminalId, resolveCanonicalErpTerminalId } from './terminalIdentity';
 import { isPosSaleActive } from '../../utils/posSaleActivity';
@@ -1414,6 +1415,18 @@ class SyncManager {
         if (!config || typeof config !== 'object') return {};
         const { id, _db_initialized, config_metadata, _id, ...rest } = config;
         return rest;
+    }
+
+    private erpLoyaltyScope(context: Pick<ReturnType<SyncManager['getActiveTerminalContext']>, 'tenantId' | 'terminalId'>) {
+        const binding = getStoredErpSyncBinding();
+        const terminalId = context.terminalId?.toLowerCase();
+        const matchesBinding = context.tenantId?.toLowerCase() === binding.tenantId?.toLowerCase()
+            && Boolean(terminalId && [binding.terminalUuid, binding.terminalId].some(id => id?.toLowerCase() === terminalId));
+        return {
+            tenantId: context.tenantId,
+            terminalId: matchesBinding ? binding.terminalUuid || binding.terminalId : context.terminalId,
+            storeId: matchesBinding ? binding.storeId : null,
+        };
     }
 
     private getPendingTerminalSnapshot(targetTerminalId: string | null, localTerminalId: string | null): any | null {
@@ -3794,6 +3807,7 @@ class SyncManager {
         if (!context.terminalId) {
             return null;
         }
+        const loyaltyScope = this.erpLoyaltyScope(context);
 
         const catalogBindingProof = options?.requireOperationalTerminalConfig ? readOperationalCatalogBindingProof() : undefined;
         const refreshAuthority = options?.requireOperationalTerminalConfig
@@ -4066,19 +4080,24 @@ class SyncManager {
 
                     if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
                         const rawIncomingConfig = payload.config as BusinessConfig;
-                        const incomingConfig = {
-                            ...rawIncomingConfig,
-                            posCategories: Array.isArray(rawIncomingConfig.posCategories)
-                                ? mergePosCategoryPresentation(baseConfig.posCategories, rawIncomingConfig.posCategories)
-                                : baseConfig.posCategories,
-                        } as BusinessConfig;
-                        const changed =
-                            JSON.stringify(this.sanitizeConfig(baseConfig)) !==
-                            JSON.stringify(this.sanitizeConfig(incomingConfig));
+                        const { incomingConfig, changed } = await withErpLoyaltyConfigWrite(async () => {
+                            const current = await db.get('config') as unknown as BusinessConfig | null;
+                            const prior = Array.isArray(current?.terminals) ? current : baseConfig;
+                            const candidate = {
+                                ...rawIncomingConfig,
+                                posCategories: Array.isArray(rawIncomingConfig.posCategories)
+                                    ? mergePosCategoryPresentation(prior.posCategories, rawIncomingConfig.posCategories)
+                                    : prior.posCategories,
+                            };
+                            const incomingConfig = preserveErpLoyaltyFromLegacyConfig(prior, candidate, loyaltyScope);
+                            const changed = JSON.stringify(this.sanitizeConfig(prior)) !==
+                                JSON.stringify(this.sanitizeConfig(incomingConfig));
 
-                        if (options?.persist !== false && changed) {
-                            await measureSettingsReturnQa('sync.config.terminalFallback.replace', () => db.save('config', incomingConfig));
-                        }
+                            if (options?.persist !== false && changed) {
+                                await measureSettingsReturnQa('sync.config.terminalFallback.replace', () => db.save('config', incomingConfig));
+                            }
+                            return { incomingConfig, changed };
+                        });
 
                         if (options?.dispatchEvent !== false && changed) {
                             window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
@@ -4224,51 +4243,57 @@ class SyncManager {
             projectedConfig.tariffs = configForTerminalSnapshot.tariffs;
             projectedConfig.taxes = configForTerminalSnapshot.taxes;
         }
-        const changedSections = terminalConfigChangedSections(
-            this.sanitizeConfig(configForTerminalSnapshot), this.sanitizeConfig(projectedConfig),
-        );
-        const changed = changedSections.length > 0;
-        // Reuse the stored representation for an equivalent refresh so runtime
-        // authority fingerprints and SQLite retain the same object key order.
-        const nextConfig = changed ? projectedConfig : configForTerminalSnapshot;
-        const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
-        const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
-
-        const persistResolvedAuthority = async () => {
-            if (options?.persist !== false && changed) {
-                if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
-                for (const section of changedSections) markSettingsReturnQa(`sync.config.terminalResolved.changed.${section}`);
-                await measureSettingsReturnQa('sync.config.terminalResolved.replace', () => db.save('config', nextConfig));
-            } else if (!changed) {
-                markSettingsReturnQa('sync.config.terminalResolved.unchanged');
-            }
-
-            if (nextRuntimeWarehouses.length > 0) {
-                const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
-                const persistedJson = JSON.stringify(persistedWarehouses);
-                const nextJson = JSON.stringify(nextRuntimeWarehouses);
-
-                if (persistedJson !== nextJson) {
-                    await db.save('warehouses', nextRuntimeWarehouses);
-                    window.dispatchEvent(new CustomEvent('warehousesUpdated'));
-                }
-            }
-
-            await db.rehydrateOperationalDocumentState(
-                operationalDocumentState.documentSeries,
-                operationalDocumentState.fiscalRanges,
-                operationalDocumentState.fiscalAllocations,
-                operationalDocumentState.terminalId,
+        const savedResolution = await withErpLoyaltyConfigWrite(async () => {
+            const persisted = await db.get('config') as unknown as BusinessConfig | null;
+            const current = Array.isArray(persisted?.terminals) ? persisted : configForTerminalSnapshot;
+            const authoritativeConfig = preserveErpLoyaltyFromLegacyConfig(current, projectedConfig, loyaltyScope);
+            const changedSections = terminalConfigChangedSections(
+                this.sanitizeConfig(current), this.sanitizeConfig(authoritativeConfig),
             );
+            const changed = changedSections.length > 0;
+            // Reuse the stored representation for an equivalent refresh so runtime
+            // authority fingerprints and SQLite retain the same object key order.
+            const nextConfig = changed ? authoritativeConfig : current;
+            const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
+            const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
+            const persistResolvedAuthority = async () => {
+                if (options?.persist !== false && changed) {
+                    if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+                    for (const section of changedSections) markSettingsReturnQa(`sync.config.terminalResolved.changed.${section}`);
+                    await measureSettingsReturnQa('sync.config.terminalResolved.replace', () => db.save('config', nextConfig));
+                } else if (!changed) {
+                    markSettingsReturnQa('sync.config.terminalResolved.unchanged');
+                }
 
-            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
-        };
-        if (v3Authority && changed && options?.persist !== false && options?.dispatchEvent !== false) {
-            await publishV3SalesConfig(applied.terminalId, configForTerminalSnapshot, nextConfig, persistResolvedAuthority);
-        } else {
-            await persistResolvedAuthority();
-        }
+                if (nextRuntimeWarehouses.length > 0) {
+                    const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
+                    const persistedJson = JSON.stringify(persistedWarehouses);
+                    const nextJson = JSON.stringify(nextRuntimeWarehouses);
 
+                    if (persistedJson !== nextJson) {
+                        await db.save('warehouses', nextRuntimeWarehouses);
+                        window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+                    }
+                }
+
+                await db.rehydrateOperationalDocumentState(
+                    operationalDocumentState.documentSeries,
+                    operationalDocumentState.fiscalRanges,
+                    operationalDocumentState.fiscalAllocations,
+                    operationalDocumentState.terminalId,
+                );
+
+                if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
+            };
+            if (v3Authority && changed && options?.persist !== false && options?.dispatchEvent !== false) {
+                await publishV3SalesConfig(applied.terminalId, current, nextConfig, persistResolvedAuthority);
+            } else {
+                await persistResolvedAuthority();
+            }
+            return { nextConfig, changed, operationalDocumentState };
+        });
+        let { nextConfig } = savedResolution;
+        const { changed, operationalDocumentState } = savedResolution;
         window.dispatchEvent(new CustomEvent('terminalFiscalDocumentsUpdated', {
             detail: { terminalId: operationalDocumentState.terminalId },
         }));
@@ -4349,9 +4374,13 @@ class SyncManager {
             this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
         }
 
-        if (options?.dispatchEvent !== false && changed) {
-            window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
-        }
+        await withErpLoyaltyConfigWrite(async () => {
+            const current = await db.get('config') as unknown as BusinessConfig | null;
+            nextConfig = preserveErpLoyaltyFromLegacyConfig(current, nextConfig, loyaltyScope);
+            if (options?.dispatchEvent !== false && changed) {
+                window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
+            }
+        });
 
         const runSupplementalMasterData = async () => {
             try {
@@ -5776,37 +5805,39 @@ class SyncManager {
             brands.length > 0 ||
             posCategories.length > 0
         ) {
-            const currentConfig = ((await db.get('config')) || {}) as Record<string, any>;
-            const mergedPosCategories = posCategories.length > 0
-                ? mergePosCategoryPresentation(currentConfig.posCategories, posCategories)
-                : currentConfig.posCategories;
-            const incomingClassifications = {
-                departments,
-                sections,
-                families,
-                subfamilies,
-                brands,
-                posCategories: posCategories.length > 0 ? mergedPosCategories : [],
-            };
-            const content = (row: Record<string, unknown>) => JSON.stringify(Object.fromEntries(
-                Object.keys(row).filter(key => key !== 'updatedAt').sort().map(key => [key, row[key]]),
-            ));
-            const updates = Object.fromEntries(Object.entries(incomingClassifications).filter(([key, rows]) => {
-                if (!rows.length) return false;
-                const current = currentConfig[key];
-                return !Array.isArray(current) || current.length !== rows.length || rows.some((row, index) => {
-                    const previous = current[index];
-                    return !previous || typeof previous !== 'object' || content(row) !== content(previous);
-                });
-            }));
-            if (Object.keys(updates).length > 0) {
-                const nextConfig = { ...currentConfig, ...updates };
-                await measureSettingsReturnQa('sync.config.classifications.replace', () => db.save('config', nextConfig));
-                nextConfigWithClassifications = nextConfig;
-                changed = true;
-            } else {
-                markSettingsReturnQa('sync.config.classifications.unchanged');
-            }
+            await withErpLoyaltyConfigWrite(async () => {
+                const currentConfig = ((await db.get('config')) || {}) as Record<string, any>;
+                const mergedPosCategories = posCategories.length > 0
+                    ? mergePosCategoryPresentation(currentConfig.posCategories, posCategories)
+                    : currentConfig.posCategories;
+                const incomingClassifications = {
+                    departments,
+                    sections,
+                    families,
+                    subfamilies,
+                    brands,
+                    posCategories: posCategories.length > 0 ? mergedPosCategories : [],
+                };
+                const content = (row: Record<string, unknown>) => JSON.stringify(Object.fromEntries(
+                    Object.keys(row).filter(key => key !== 'updatedAt').sort().map(key => [key, row[key]]),
+                ));
+                const updates = Object.fromEntries(Object.entries(incomingClassifications).filter(([key, rows]) => {
+                    if (!rows.length) return false;
+                    const current = currentConfig[key];
+                    return !Array.isArray(current) || current.length !== rows.length || rows.some((row, index) => {
+                        const previous = current[index];
+                        return !previous || typeof previous !== 'object' || content(row) !== content(previous);
+                    });
+                }));
+                if (Object.keys(updates).length > 0) {
+                    const nextConfig = { ...currentConfig, ...updates };
+                    await measureSettingsReturnQa('sync.config.classifications.replace', () => db.save('config', nextConfig));
+                    nextConfigWithClassifications = nextConfig;
+                    changed = true;
+                } else {
+                    markSettingsReturnQa('sync.config.classifications.unchanged');
+                }
+            });
         }
 
         if (changed) {
@@ -7961,12 +7992,16 @@ class SyncManager {
                 };
             }
 
-            const localSanitized = this.sanitizeConfig(localConfig);
-            const incomingSanitized = this.sanitizeConfig(finalConfig);
-
-            const localConfigJson = JSON.stringify(localSanitized);
-            const incomingConfigJson = JSON.stringify(incomingSanitized);
-            const changed = localConfigJson !== incomingConfigJson;
+            const scope = this.erpLoyaltyScope(this.getActiveTerminalContext(localConfig));
+            const changed = await withErpLoyaltyConfigWrite(async () => {
+                const current = await db.get('config') as unknown as BusinessConfig | null;
+                const prior = Array.isArray(current?.terminals) ? current : localConfig;
+                finalConfig = preserveErpLoyaltyFromLegacyConfig(prior, finalConfig, scope);
+                if (JSON.stringify(this.sanitizeConfig(prior)) === JSON.stringify(this.sanitizeConfig(finalConfig))) return false;
+                console.log('💾 Saving global configuration...');
+                await db.save('config', finalConfig);
+                return true;
+            });
 
             if (!changed) {
                 if (typeof remoteVersion === 'number') {
@@ -7975,9 +8010,6 @@ class SyncManager {
                 }
                 return;
             }
-
-            console.log('💾 Saving global configuration...');
-            await db.save('config', finalConfig);
 
             const finalVersion = (typeof remoteVersion === 'number')
                 ? remoteVersion

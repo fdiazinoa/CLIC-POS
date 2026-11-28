@@ -1,3 +1,4 @@
+import type { ErpLoyaltyPolicyVersion } from '../types';
 import { normalizeCategoryOption } from './categoryOptions';
 import { mergeTerminalPosOptions } from './terminalPosOptions';
 import {
@@ -1860,6 +1861,7 @@ export interface ApplyTerminalConfigSnapshotOptions {
   incomingSnapshot?: TerminalConfigSnapshot | null;
   cachedSnapshot?: TerminalConfigSnapshot | null;
   preserveOmittedOperationalScopes?: boolean;
+  erpLoyaltyPolicyVersion?: ErpLoyaltyPolicyVersion;
   catalogBindingProof?: { terminalId: string; tenantId: string; companyId: string; deviceId: string };
 }
 
@@ -3112,8 +3114,11 @@ export const applyTerminalConfigSnapshot = (
     visibleWarehouseIds: effectiveAllowedWarehouseIds,
   };
 
-  if (hasIncomingLoyaltyConfig) {
-    nextConfig.loyalty = loyaltyConfig || nextConfig.loyalty;
+  const staleLoyaltyEnable = snapshotSource === 'cached_snapshot'
+    && baseConfig.loyalty?.isEnabled === false && loyaltyConfig?.isEnabled === true;
+  if (hasIncomingLoyaltyConfig && loyaltyConfig && !staleLoyaltyEnable) {
+    nextConfig.loyalty = loyaltyConfig;
+    if (options.erpLoyaltyPolicyVersion) nextConfig.erpLoyaltyPolicyVersion = options.erpLoyaltyPolicyVersion;
   }
 
   if (hasIncomingCampaigns) {
