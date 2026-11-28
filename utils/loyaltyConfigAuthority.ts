@@ -1,6 +1,7 @@
 import type { BusinessConfig, ErpLoyaltyPolicyVersion } from '../types';
 import type { DatabaseAdapter } from '../services/db/DatabaseAdapter';
 import type { SyncProfile } from '../services/sync/SyncProfile';
+import type { db } from './db';
 
 export const isErpLoyaltyManaged = (profile: Pick<SyncProfile, 'contractedProduct' | 'cloudChannel'>): boolean =>
     profile.contractedProduct === 'POS_ERP' || profile.cloudChannel === 'ERP_ACTIVE';
@@ -10,9 +11,9 @@ export type ErpLoyaltyScope = { tenantId: string | null; terminalId: string | nu
 export function readErpLoyaltyPolicyVersion(config: BusinessConfig | null, scope: ErpLoyaltyScope): ErpLoyaltyPolicyVersion | undefined {
     const policy = config?.erpLoyaltyPolicyVersion;
     const key = (id: string | null | undefined) => typeof id === 'string' ? id.trim().toLowerCase() : '';
-    if (!policy || !Number.isSafeInteger(policy.version) || policy.version <= 0 || !key(scope.tenantId) || !key(scope.terminalId)) return;
+    if (!policy || typeof config?.loyalty?.isEnabled !== 'boolean' || !Number.isSafeInteger(policy.version) || policy.version <= 0 || !key(scope.tenantId) || !key(scope.terminalId)) return;
     if (key(policy.tenantId) === key(scope.tenantId) && key(policy.terminalId) === key(scope.terminalId)
-        && (!key(policy.storeId) || !key(scope.storeId) || key(policy.storeId) === key(scope.storeId))) return policy;
+        && key(policy.storeId) === key(scope.storeId)) return policy;
 }
 
 export function preserveErpLoyaltyFromLegacyConfig(current: BusinessConfig | null, incoming: BusinessConfig, scope: ErpLoyaltyScope): BusinessConfig {
@@ -30,6 +31,24 @@ export function withErpLoyaltyConfigWrite<T>(write: () => Promise<T>): Promise<T
     const result = configWriteLane.then(write, write);
     configWriteLane = result.then(() => undefined, () => undefined);
     return result;
+}
+
+export async function updateCurrentBusinessConfig(
+    database: Pick<typeof db, 'get' | 'save'>,
+    fallback: BusinessConfig,
+    update: (current: BusinessConfig) => BusinessConfig,
+    notify: (config: BusinessConfig) => void,
+): Promise<BusinessConfig | null> {
+    return withErpLoyaltyConfigWrite(async () => {
+        const persisted = await database.get('config') as unknown as BusinessConfig | null;
+        const current = Array.isArray(persisted?.terminals) ? persisted : fallback;
+        const next = update(current);
+        if (next === current) return null;
+
+        await database.save('config', next);
+        notify(next);
+        return next;
+    });
 }
 
 export async function saveLocalConfigPreservingErpLoyalty(

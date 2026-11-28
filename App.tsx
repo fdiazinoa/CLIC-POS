@@ -508,7 +508,7 @@ import {
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 import { azulMcmService } from './services/payments/AzulMcmService';
 import { ingenicoAzulWebApiService } from './services/payments/IngenicoAzulWebApiService';
-import { couponService } from './utils/couponService';
+import { couponService, persistKioskCouponTicketReference } from './utils/couponService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -15763,23 +15763,9 @@ const AppContent: React.FC = () => {
                   : await createKioskTransaction();
 
                 if (kioskRedeemedCoupon) {
-                  const finalTicketRef = txn.displayId || txn.id;
-                  const configWithFinalCouponRef: BusinessConfig = {
-                    ...config,
-                    coupons: (kioskPaymentConfig.coupons || []).map((coupon) =>
-                      coupon.id === kioskRedeemedCoupon.id
-                        ? {
-                          ...coupon,
-                          status: 'REDEEMED',
-                          ticketRef: finalTicketRef,
-                          terminalId: currentTerminal.id,
-                          redeemedAt: coupon.redeemedAt || new Date().toISOString(),
-                        }
-                        : coupon
-                    ),
-                  };
-                  setConfig(configWithFinalCouponRef);
-                  await db.save('config', configWithFinalCouponRef);
+                  await persistKioskCouponTicketReference(
+                    db, kioskPaymentConfig, kioskRedeemedCoupon.id, currentTerminal.id, txn.displayId || txn.id, setConfig,
+                  );
                 }
 
                 if (isWalletPayment && selectedCustomer?.id) {

@@ -105,6 +105,7 @@ const runEvent = async (input: {
     snapshotResponses?: Response[];
     observe?: (acks: Array<Record<string, unknown>>) => void;
     onAck?: (body: Record<string, unknown>) => void;
+    onSnapshot?: () => void;
 }) => {
     const event = makeEvent(input.id, input.scopes, input.versions);
     let outboxServed = false;
@@ -120,6 +121,7 @@ const runEvent = async (input: {
         }
         if (url.includes('/config-snapshots/')) {
             snapshotUrls.push(url);
+            input.onSnapshot?.();
             const queued = responses.shift();
             if (queued) return queued;
             return Response.json({
@@ -627,6 +629,128 @@ test('out-of-order loyalty and mixed terminal ACKs cannot undo a newer OFF rule'
     assert.equal(savedVersion(), 6);
     assert.equal(savedConfig().loyalty?.isEnabled, true);
     assert.equal(savedConfig().erpLoyaltyPolicyVersion?.version, 6);
+});
+
+test('an existing event hash cannot ACK a loyalty policy lost from durable config', async () => {
+    const { config } = resetHarness();
+    const id = 'recover-same-loyalty-hash';
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: `hash-${id}`, domainVersions: { loyalty: 5 }, inFlight: null,
+    }));
+
+    const { acks, snapshotUrls } = await runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+        onAck: (ack) => {
+            assert.equal(ack.status, 'APPLIED');
+            const persisted = collections.get('config') as typeof config;
+            assert.equal(persisted.loyalty?.isEnabled, false);
+            assert.equal(persisted.erpLoyaltyPolicyVersion?.version, 5);
+        },
+    });
+    assert.equal(acks[0].status, 'APPLIED');
+    assert.equal(snapshotUrls.length, 1);
+    assert.doesNotMatch(snapshotUrls[0], /current_version=/);
+});
+
+test('the same terminal needs durable loyalty evidence for its new store', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const off = { ...config.loyalty, isEnabled: false };
+    const send = (id: string, version: number, rule: typeof config.loyalty, storeId: string | null) => runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { ...(storeId ? { store_id: storeId } : {}), loyalty: { config: rule } } },
+    });
+    assert.equal((await send('store-a-off', 5, off, 'store-a')).acks[0].status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.storeId, 'store-a');
+
+    localStorage.setItem('clic_erp_sync_store_id', 'store-b');
+    const wrongBranch = await send('queued-in-store-a', 6, config.loyalty, 'store-a');
+    assert.notEqual(wrongBranch.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, false);
+    const { acks, snapshotUrls } = await send('store-b-on', 2, config.loyalty, 'store-b');
+    assert.equal(acks[0].status, 'APPLIED');
+    assert.equal(snapshotUrls.length, 1);
+    const saved = collections.get('config') as typeof config;
+    assert.equal(saved.erpLoyaltyPolicyVersion?.storeId, 'store-b');
+    assert.equal(saved.erpLoyaltyPolicyVersion?.version, 2);
+    assert.equal(saved.loyalty?.isEnabled, true);
+    const unscoped = await send('old-unscoped-policy', 10, off, null);
+    assert.equal(unscoped.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion?.version, 2);
+    const midDownload = await runEvent({
+        id: 'changed-store-during-download', scopes: ['loyalty'], versions: { loyalty: 3 },
+        domains: { loyalty: { store_id: 'store-b', loyalty: { config: off } } },
+        onSnapshot: () => localStorage.setItem('clic_erp_sync_store_id', 'store-c'),
+    });
+    assert.notEqual(midDownload.acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+});
+
+test('a campaign-only snapshot does not prove a newer program policy was applied', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_erp_sync_store_id', 'store-a');
+    const send = (id: string, version: number, loyalty: Record<string, unknown>, storeId?: string) => runEvent({
+        id, scopes: ['loyalty'], versions: { loyalty: version },
+        domains: { loyalty: { ...(storeId ? { store_id: storeId } : {}), loyalty } },
+    });
+    assert.equal((await send('policy-off', 5, { config: { ...config.loyalty, isEnabled: false } }, 'store-a')).acks[0].status, 'APPLIED');
+    assert.equal((await send('only-campaigns', 7, { config: null, campaigns: [], coupons: [] })).acks[0].status, 'APPLIED');
+    const program = () => (collections.get('config') as typeof config).erpLoyaltyPolicyVersion;
+    assert.equal(program()?.version, 5);
+
+    const genuineChange = await send('policy-on', 6, { config: config.loyalty }, 'store-a');
+    assert.equal(genuineChange.acks[0].status, 'APPLIED');
+    assert.equal(genuineChange.snapshotUrls.length, 1);
+    assert.equal(program()?.version, 6);
+});
+
+test('a loyalty policy without an explicit Boolean cannot be applied or acknowledged', async () => {
+    const { config } = resetHarness();
+    const { acks } = await runEvent({
+        id: 'malformed-loyalty-policy', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: 'false' } } } },
+    });
+    assert.notEqual(acks[0]?.status, 'APPLIED');
+    assert.equal((collections.get('config') as typeof config).erpLoyaltyPolicyVersion, undefined);
+    assert.equal((collections.get('config') as typeof config).loyalty?.isEnabled, true);
+});
+
+test('writes from kiosk redemption and payment audit retain the latest ERP program rule', async () => {
+    const { config, localTerminalId } = resetHarness();
+    const { persistKioskCouponTicketReference } = await import('../utils/couponService');
+    const { createPaymentIntegrationAuditEvent, dispatchAuditEventConfigUpdate } = await import('../services/payments/paymentIntegrationAudit');
+    const integration = {
+        id: 'integration-active', name: 'Payment test', provider: 'INGENICO_AZUL_WEBAPI',
+        environment: 'TEST', isEnabled: true, baseUrl: 'https://payment.example.test',
+    } as NonNullable<typeof config.integrations>[number];
+    const fallback = { ...config, integrations: [integration], coupons: [{
+        id: 'coupon-active', code: 'TEST-CUPON', campaignId: 'campaign', status: 'ASSIGNED' as const,
+        createdAt: '2026-11-28T12:00:00Z',
+    }] };
+    collections.set('config', fallback);
+    assert.equal((await runEvent({
+        id: 'disable-before-audit', scopes: ['loyalty'], versions: { loyalty: 5 },
+        domains: { loyalty: { loyalty: { config: { ...config.loyalty, isEnabled: false } } } },
+    })).acks[0].status, 'APPLIED');
+
+    const couponConfig = await persistKioskCouponTicketReference(
+        db, fallback, 'coupon-active', localTerminalId, 'TICKET-1', () => {},
+    );
+    assert.equal(couponConfig?.coupons?.[0].ticketRef, 'TICKET-1');
+    assert.equal(couponConfig?.coupons?.[0].status, 'REDEEMED');
+    assert.equal(couponConfig?.loyalty?.isEnabled, false);
+    assert.equal(couponConfig?.erpLoyaltyPolicyVersion?.version, 5);
+
+    const event = createPaymentIntegrationAuditEvent(integration, {
+        action: 'SALE', status: 'SUCCESS', message: 'Fixture',
+    });
+    const audited = await dispatchAuditEventConfigUpdate(fallback, integration.id, event);
+    assert.equal(audited?.integrations?.[0].auditEvents?.[0].id, event.id);
+    assert.equal(audited?.coupons?.[0].ticketRef, 'TICKET-1');
+    assert.equal(audited?.loyalty?.isEnabled, false);
+    assert.equal(audited?.erpLoyaltyPolicyVersion?.version, 5);
 });
 
 test('a delayed resolved refresh and pending bootstrap cannot restore earlier unversioned ON', async () => {
