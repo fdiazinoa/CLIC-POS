@@ -13,6 +13,8 @@ import {createUuid} from '../../utils/uuid';
 import {financialIdentity} from './LargeMasterSyncV3FinancialRetention';
 import type {Transaction} from '../../types';
 import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowStateV2,FiscalWorkflowStore,FiscalWorkflowBirthV2,FiscalWorkflowReserveOptions} from '../fiscal/FiscalWorkflowV2Types';
+import {ABSOLUTE_FISCAL_RECOVERY_SCHEMA,absoluteFiscalRecoveryCandidate,releaseAbsoluteFiscalAttempt,type AbsoluteFiscalRecoveryCandidate} from './AbsoluteFiscalRecoveryStore';
+import type {FiscalWorkflowScope} from '../fiscal/FiscalWorkflowV2Types';
 type Connection={execute(sql:string,transaction?:boolean):Promise<any>;run(sql:string,params?:any[],transaction?:boolean):Promise<any>;query(sql:string,params?:any[]):Promise<{values?:any[]}>};
 export const FISCAL_WORKFLOW_V2_SCHEMA=`
 CREATE TABLE IF NOT EXISTS pos_fiscal_permits_v2(permit_id TEXT PRIMARY KEY,transaction_id TEXT NOT NULL UNIQUE,scope_key TEXT NOT NULL,permit_json TEXT NOT NULL,expires_at TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('AVAILABLE','RESERVED','CONSUMED')),checkout_id TEXT UNIQUE);
@@ -33,7 +35,7 @@ CREATE TRIGGER IF NOT EXISTS pos_fiscal_permit_delete_v2 BEFORE DELETE ON pos_fi
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_checkout_delete_v2 BEFORE DELETE ON pos_fiscal_checkouts_v2 BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_DURABLE_IDENTITY');END;
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_state_delete_v2 BEFORE DELETE ON pos_fiscal_state_v2 BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_DURABLE_IDENTITY');END;
 DROP TRIGGER IF EXISTS pos_fiscal_state_identity_v2;
-CREATE TRIGGER pos_fiscal_state_identity_v2 BEFORE UPDATE ON pos_fiscal_state_v2 WHEN OLD.transaction_id IS NOT NEW.transaction_id OR OLD.scope_key IS NOT NEW.scope_key OR OLD.source_identity IS NOT NEW.source_identity OR OLD.source_original IS NOT NEW.source_original OR NEW.version<OLD.version OR NEW.version=OLD.version AND NOT (json_extract(OLD.state_json,'$.sourceKind')='RETURN_SOURCE_V1' AND json_extract(OLD.state_json,'$.mode')='PREPARED' AND json_extract(NEW.state_json,'$.sourceKind')='RETURN_SOURCE_V1' AND json_extract(NEW.state_json,'$.mode')='WORKFLOW') BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_SIDECAR_CAS');END;`+FISCAL_RETIREMENT_IDENTITY_SCHEMA+OFFLINE_FISCAL_LEASE_SCHEMA+OFFLINE_FISCAL_ABANDON_SCHEMA+OFFLINE_FISCAL_ALLOCATION_SCHEMA;
+CREATE TRIGGER pos_fiscal_state_identity_v2 BEFORE UPDATE ON pos_fiscal_state_v2 WHEN OLD.transaction_id IS NOT NEW.transaction_id OR OLD.scope_key IS NOT NEW.scope_key OR OLD.source_identity IS NOT NEW.source_identity OR OLD.source_original IS NOT NEW.source_original OR NEW.version<OLD.version OR NEW.version=OLD.version AND NOT (json_extract(OLD.state_json,'$.sourceKind')='RETURN_SOURCE_V1' AND json_extract(OLD.state_json,'$.mode')='PREPARED' AND json_extract(NEW.state_json,'$.sourceKind')='RETURN_SOURCE_V1' AND json_extract(NEW.state_json,'$.mode')='WORKFLOW') BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_SIDECAR_CAS');END;`+FISCAL_RETIREMENT_IDENTITY_SCHEMA+OFFLINE_FISCAL_LEASE_SCHEMA+OFFLINE_FISCAL_ABANDON_SCHEMA+ABSOLUTE_FISCAL_RECOVERY_SCHEMA+OFFLINE_FISCAL_ALLOCATION_SCHEMA;
 const fail=():never=>{throw Error('FISCAL_WORKFLOW_NATIVE_CONFLICT');};
 const one=(r:{values?:any[]})=>r.values?.[0];
 const parseJson=(value:unknown):any=>{try{return value===undefined||value===null?null:JSON.parse(String(value));}catch{return null;}};
@@ -99,6 +101,12 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
   await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[expected.scopeKey,expected.checkoutId],false);
   if(Number((await sql.query('SELECT changes() count')).values?.[0]?.count)!==1)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE: CURRENT_CHECKOUT_DELETE_MISMATCH');
  });}
+ async readAbsoluteRecoveryCandidate(scope:FiscalWorkflowScope):Promise<AbsoluteFiscalRecoveryCandidate|null>{
+  return absoluteFiscalRecoveryCandidate(await this.currentCheckout(fiscalWorkflowScopeKey(scope)),scope);
+ }
+ async releaseAbsoluteRecovery(scope:FiscalWorkflowScope,expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,remoteReference:string,actor:string):Promise<void>{
+  return this.transaction(sql=>releaseAbsoluteFiscalAttempt(sql,scope,expected,observedNcf,remoteReference,actor));
+ }
  async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2,options:{allowOfflineEffect?:boolean}={}):Promise<void>{await this.transaction(async sql=>{
   const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
@@ -208,7 +216,7 @@ async function assertOfflineCheckoutAuthority(sql:Connection,checkout:FiscalWork
  return lease;
 }
 
-async function assertNotAbandoned(sql:Connection,checkoutId:string){if((await sql.query('SELECT 1 FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=? COLLATE NOCASE',[checkoutId])).values?.length)throw Error('OFFLINE_FISCAL_ABANDONED');}
+async function assertNotAbandoned(sql:Connection,checkoutId:string){if((await sql.query('SELECT 1 FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=? COLLATE NOCASE UNION ALL SELECT 1 FROM pos_absolute_fiscal_recovery_v2 WHERE checkout_id=? COLLATE NOCASE',[checkoutId,checkoutId])).values?.length)throw Error('OFFLINE_FISCAL_ABANDONED');}
 
 /** Uses the caller-owned writer transaction. Never opens, commits or releases a transaction. */
 export async function reserveFiscalWorkflowCheckoutInTransaction(sql:Connection,scopeKey:string,cartIdentity:string,selection?:{operationKind:'RETURN'|'VOID';originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>},operationId?:string,options?:FiscalWorkflowReserveOptions):Promise<FiscalWorkflowCheckoutV2>{

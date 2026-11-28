@@ -170,7 +170,8 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
  const promoted=mutations.filter(row=>row.recoveryOriginal!==undefined);
  if(!promoted.length)return;
  const abandonedExists=(await sql.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pos_offline_fiscal_abandoned_v1'")).values?.length;
- const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1'+(abandonedExists?' UNION SELECT transaction_id,checkout_id,permit_id FROM pos_offline_fiscal_abandoned_v1':'')+' LIMIT 513')).values||[];
+ const absoluteExists=(await sql.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pos_absolute_fiscal_recovery_v2'")).values?.length;
+ const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1'+(abandonedExists?' UNION SELECT transaction_id,checkout_id,permit_id FROM pos_offline_fiscal_abandoned_v1':'')+(absoluteExists?' UNION SELECT transaction_id,checkout_id,operation_id FROM pos_absolute_fiscal_recovery_v2 UNION SELECT transaction_id,checkout_id,payment_id FROM pos_absolute_fiscal_recovery_v2':'')+' LIMIT 513')).values||[];
  if(!retired.length)return;if(retired.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
  const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id].map(uuidIdentity)));let nodes=0,total=0;
  const scan=(value:any,depth=0,wrappers=0,key=''):void=>{

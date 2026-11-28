@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, ShieldCheck, ShieldAlert, Eraser, Loader2, ClipboardCopy } from 'lucide-react';
 import { clicConfirm, clicPrompt, clicAlert } from '../services/dialog/ClicDialogService';
 import type { RoleDefinition, User } from '../types';
-import type { absoluteFiscalRecoveryIdentity } from '../services/fiscal/AbsoluteFiscalRecoveryIdentity';
+import type { AbsoluteFiscalRecoveryCandidate } from '../services/db/AbsoluteFiscalRecoveryStore';
 
 type Snapshot = Awaited<ReturnType<typeof readSnapshot>>;
 
@@ -39,7 +39,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
    const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | 'absolute-recovery' | null>(null);
    const [note, setNote] = useState('');
    const [releaseOffered, setReleaseOffered] = useState(false);
-   const [absoluteIdentity, setAbsoluteIdentity] = useState<ReturnType<typeof absoluteFiscalRecoveryIdentity>>(null);
+   const [absoluteIdentity, setAbsoluteIdentity] = useState<AbsoluteFiscalRecoveryCandidate | null>(null);
 
    const refresh = useCallback(async () => {
       setBusy('refresh');
@@ -62,14 +62,16 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
    };
 
    /** A supervisor with checkout permission authorizes the ERP retirement of a paid attempt. */
-   const requestSupervisor = async (): Promise<{ actorId: string; pin: string } | null> => {
+   const requestSupervisor = async (absoluteRecovery = false): Promise<{ actorId: string; pin: string } | null> => {
       const authorized = users.filter(user => {
          const role = roles.find(item => item.id === user.role);
-         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any);
+         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any) && (!absoluteRecovery || user.isActive !== false);
       });
-      const candidates = authorized.length ? authorized : currentUser ? [currentUser] : [];
+      const candidates = authorized.length ? authorized : !absoluteRecovery && currentUser ? [currentUser] : [];
       if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar el cierre del intento.'); return null; }
-      const pin = await clicPrompt('Este intento ya registró un cobro. Escribe el PIN de un supervisor con permiso de cobro para que el ERP confirme el cierre.', { inputType: 'password', required: true });
+      const pin = await clicPrompt(absoluteRecovery
+         ? 'Introduce el PIN de un supervisor con permiso de cobro para registrar esta liberación de Absolute.'
+         : 'Este intento ya registró un cobro. Escribe el PIN de un supervisor con permiso de cobro para que el ERP confirme el cierre.', { inputType: 'password', required: true });
       if (!pin) return null;
       const entered = String(pin).trim();
       const supervisor = candidates.find(user => String(user.pin) === entered);
@@ -143,10 +145,32 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       setAbsoluteIdentity(null);
       try {
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-         const identity = await fiscalWorkflowV2Client.readAbsoluteRecoveryIdentity();
+         const identity = await fiscalWorkflowV2Client.readAbsoluteRecoveryCandidate();
          if (!identity) { setNote('El intento específico de Absolute ya no está disponible en esta caja.'); return; }
          setAbsoluteIdentity(identity);
       } catch { setNote('No se pudo verificar la identidad fiscal del intento de Absolute.'); }
+      finally { setBusy(null); }
+   };
+
+   const releaseAbsolute = async (candidate: AbsoluteFiscalRecoveryCandidate) => {
+      setBusy('absolute-recovery');
+      try {
+         const observed = await clicPrompt('Verifica que la venta quedó sin cobrar y que la transacción y su e-NCF no figuran en el ERP ni en MSeller. Escribe el e-NCF exacto de la verificación para confirmar.', { required: true });
+         if (observed === null) return;
+         if (observed.trim() !== candidate.ncf) { setNote('El e-NCF ingresado no coincide con el intento verificado.'); return; }
+         const reference = await clicPrompt('Introduce la referencia SHA-256 de la verificación en el ERP y MSeller.', { required: true });
+         if (reference === null) return;
+         if (!/^[0-9a-f]{64}$/.test(reference.trim())) { setNote('La referencia de verificación debe contener 64 caracteres hexadecimales.'); return; }
+         const operator = await requestSupervisor(true);
+         if (!operator) return;
+         const confirmed = await clicConfirm('¿Liberar el intento verificado de Absolute? Se conservarán el intento y la evidencia de la autorización.');
+         if (!confirmed) return;
+         const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+         await fiscalWorkflowV2Client.releaseAbsoluteRecovery(candidate, observed.trim(), reference.trim(), operator.actorId);
+         setAbsoluteIdentity(null);
+         setNote('Intento de Absolute liberado. Comprueba la disponibilidad E32 antes de abrir otra venta.');
+         setSnapshot(await readSnapshot());
+      } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
    };
 
@@ -231,6 +255,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
                      <dt>Autorización fiscal</dt><dd>{absoluteIdentity.authorizationId}</dd>
                      <dt>Asignación fiscal</dt><dd>{absoluteIdentity.allocationId}</dd>
                   </dl>}
+                  {absoluteIdentity && <button onClick={() => { void releaseAbsolute(absoluteIdentity); }} disabled={busy !== null} className="rounded-lg bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-40">Liberar el intento de Absolute tras la conciliación</button>}
                </section>
             )}
             {releaseOffered && (

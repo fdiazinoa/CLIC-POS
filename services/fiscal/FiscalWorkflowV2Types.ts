@@ -20,6 +20,8 @@ export interface FiscalWorkflowStore {
 
  /** Payment intents bound to an attempt transaction (why a local release may refuse). */
  intentStates?(transactionId:string):Promise<Array<{paymentId:string;status:string}>>;
+ readAbsoluteRecoveryCandidate?(scope:FiscalWorkflowScope):Promise<import('../db/AbsoluteFiscalRecoveryStore').AbsoluteFiscalRecoveryCandidate|null>;
+ releaseAbsoluteRecovery?(scope:FiscalWorkflowScope,expected:import('../db/AbsoluteFiscalRecoveryStore').AbsoluteFiscalRecoveryCandidate,observedNcf:string,remoteReference:string,actor:string):Promise<void>;
  checkoutForTable?(scopeKey:string,accountId:string,tableId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonedOfflineOperation?(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonOfflinePrepared?(expected:FiscalWorkflowCheckoutV2):Promise<void>;

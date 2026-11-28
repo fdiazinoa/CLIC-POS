@@ -19,6 +19,7 @@ import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,ass
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,reserveFiscalWorkflowCheckoutInTransaction,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
+import { ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA } from '../AbsoluteFiscalRecoveryStore';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
@@ -1643,6 +1644,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
+            ${ABSOLUTE_FISCAL_RECOVERY_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}

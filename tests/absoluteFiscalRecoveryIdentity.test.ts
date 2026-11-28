@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { absoluteFiscalRecoveryIdentity } from '../services/fiscal/AbsoluteFiscalRecoveryIdentity';
+import { absoluteFiscalRecoveryCandidate } from '../services/db/AbsoluteFiscalRecoveryStore';
 import { createFiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
 import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2 } from '../services/fiscal/FiscalWorkflowV2Types';
 
@@ -26,15 +27,19 @@ test('the Absolute incident identity is local, read-only and limited to its exac
     let sessionChecks = 0;
     let descriptor = { ...scope, terminalId: uuid(9) };
     const client = createFiscalWorkflowV2Client({
-        store: () => ({ currentCheckout: async (key: string) => { reads++; assert.equal(key, checkout.scopeKey); return checkout; } }),
+        store: () => ({ readAbsoluteRecoveryCandidate: async (descriptor: typeof scope) => { reads++; assert.equal(fiscalWorkflowScopeKey(descriptor), checkout.scopeKey); return absoluteFiscalRecoveryCandidate(checkout, descriptor); } }),
         readAuth: () => ({ descriptor, assertCurrent: () => { sessionChecks++; } }),
         fetchImpl: async () => { assert.fail('identity lookup must not call the ERP'); },
     } as any);
 
-    assert.equal(await client.readAbsoluteRecoveryIdentity(), null);
+    assert.equal(await client.readAbsoluteRecoveryCandidate(), null);
     assert.equal(reads, 0);
     descriptor = scope;
-    assert.deepEqual(await client.readAbsoluteRecoveryIdentity(), {
+    const candidate = await client.readAbsoluteRecoveryCandidate();
+    assert.ok(candidate);
+    const { snapshotHash, ...identity } = candidate;
+    assert.match(snapshotHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(identity, {
         checkoutId: checkout.checkoutId, transactionId: checkout.transactionId, operationId: checkout.operationId,
         authorizationId: uuid(5), allocationId: uuid(6), ncf,
     });

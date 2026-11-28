@@ -22,6 +22,7 @@ import {readOfflineFiscalLocalAuthority,offlineFiscalSessionState} from './Offli
 import {recordCheckoutTrace} from '../audit/CheckoutTrace';
 import {notifyOfflineFiscalReserveDegraded} from './OfflineFiscalReconciliation';
 import {absoluteFiscalRecoveryIdentity,isAbsoluteFiscalRecoveryScope} from './AbsoluteFiscalRecoveryIdentity';
+import type {AbsoluteFiscalRecoveryCandidate} from '../db/AbsoluteFiscalRecoveryStore';
 import {validateOfflineFiscalLease,validateOfflineFiscalPermit,type OfflineFiscalLease,type TableFiscalSaleContext} from './OfflineFiscalLease';
 import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowScope,FiscalWorkflowStateV2,FiscalWorkflowPreparedRecovery} from './FiscalWorkflowV2Types';
 const canonical=(value:any):any=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,canonical(value[k])])):value;
@@ -250,13 +251,19 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   try{await native.releaseAttemptWithoutErp(current,actor,{releasedPayments});return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
   catch(error){return {released:false,note:`No se pudo liberar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
  },
- async readAbsoluteRecoveryIdentity():Promise<ReturnType<typeof absoluteFiscalRecoveryIdentity>>{
+ async readAbsoluteRecoveryCandidate():Promise<AbsoluteFiscalRecoveryCandidate|null>{
   const auth=readAuth(),scope=scopeOf(auth.descriptor),native=store();
-  if(!native||!isAbsoluteFiscalRecoveryScope(scope))return null;
+  if(!native?.readAbsoluteRecoveryCandidate||!isAbsoluteFiscalRecoveryScope(scope))return null;
   auth.assertCurrent();
-  const current=await native.currentCheckout(fiscalWorkflowScopeKey(scope));
+  const candidate=await native.readAbsoluteRecoveryCandidate(scope);
   auth.assertCurrent();
-  return absoluteFiscalRecoveryIdentity(scope,current);
+  return candidate;
+ },
+ async releaseAbsoluteRecovery(expected:AbsoluteFiscalRecoveryCandidate,observedNcf:string,remoteReference:string,actor:string):Promise<void>{
+  const auth=readAuth(),scope=scopeOf(auth.descriptor),native=store();
+  auth.assertCurrent();
+  if(!native?.releaseAbsoluteRecovery||!isAbsoluteFiscalRecoveryScope(scope))fail('ABSOLUTE_FISCAL_RECOVERY_UNAVAILABLE');
+  await native.releaseAbsoluteRecovery(scope,expected,observedNcf,remoteReference,actor);
  },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
  async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{

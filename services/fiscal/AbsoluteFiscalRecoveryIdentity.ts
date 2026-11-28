@@ -18,7 +18,7 @@ export function absoluteFiscalRecoveryIdentity(scope: FiscalWorkflowScope, check
     const allocation = checkout.allocation;
     if (!allocation || allocation.ncfType !== 'E32' || !/^E32\d{10}$/.test(allocation.ncf) || !uuid.test(allocation.authorizationId) || !uuid.test(allocation.allocationId)) return null;
     const issuance = checkout.allocationIssuance;
-    if (allocation.environment !== 2 || issuance?.issuerRnc !== '131397662' || issuance.ncf !== allocation.ncf || issuance.companyId !== companyId || issuance.tenantId !== tenantId || issuance.terminalId !== terminalId) return null;
+    if (allocation.environment !== 2 || issuance?.issuerRnc !== '131397662' || issuance.ncf !== allocation.ncf || issuance.ncfType !== 'E32' || issuance.sequence !== allocation.sequence || issuance.fiscalAllocationId !== allocation.allocationId || issuance.fiscalRangeId !== allocation.fiscalRangeId || issuance.companyId !== companyId || issuance.tenantId !== tenantId || issuance.terminalId !== terminalId) return null;
     return {
         checkoutId: checkout.checkoutId,
         transactionId: checkout.transactionId,
